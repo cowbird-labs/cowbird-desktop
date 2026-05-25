@@ -24,7 +24,9 @@ type Argon struct {
 
 type Vault struct {
 	Address        string        `mapstructure:"address"`
-	RequestTimeout time.Duration `mapstructure:"request_timeout" default:"10s"}`
+	MountPath      string        `mapstructure:"mount_path" default:"cowbird"`
+	AuthMethod     string        `mapstructure:"auth_method"`
+	RequestTimeout time.Duration `mapstructure:"request_timeout" default:"10s"`
 }
 
 func Load() (Config, error) {
@@ -60,6 +62,15 @@ func Load() (Config, error) {
 
 func Save(cfg Config) error {
 	path := viper.ConfigFileUsed()
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		path = filepath.Join(home, ".config/cowbird/config.toml")
+		viper.SetConfigFile(path)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
