@@ -26,7 +26,7 @@ Key dependencies: `fyne.io/fyne/v2`, `github.com/99designs/keyring`, `hashicorp/
 
 ### auth
 
-`Method` interface with three implementations: `Userpass`, `Token`, `AppRole`. Each handles `Authenticate` and `Renew`.
+`Method` interface with three implementations: `Userpass`, `Token`, `AppRole`. Each handles `Authenticate` and `Renew`. `Result` carries `DisplayName` (userpass username, token `display_name`, AppRole `role_name`; empty on renewal paths), stored as `Vault.DisplayName` and published with the public key.
 
 ### vault
 
@@ -41,7 +41,7 @@ KV v2 paths used:
 - `users/<entityID>/identity` — locked identity (encrypted keypair)
 - `users/<entityID>/links/<shareID>` — durable SharedLink records
 - `users/<entityID>/shares/<shareID>` — owner's ShareRecords (outgoing shares)
-- `pubkeys/<entityID>` — public encryption keys
+- `pubkeys/<entityID>` — public encryption keys + display names (`pubkeyRecord{pub, name}`; pre-name records unmarshal with empty name)
 - `shared/<ownerEntityID>/<shareID>` — shared item envelopes
 - `inbox/<recipientEntityID>/<msgID>` — transient share/revoke messages
 
@@ -87,7 +87,7 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 `App{Vault, Identity, Service}` is the fully initialised application state. `NewApp` wires `sharing.NewService`.
 
-`InitIdentity` (in `core.go`) handles both paths: first run (generate keypair → lock → store → publish pubkey) and returning user (retrieve locked identity → decrypt). The unlock password is intentionally separate from the Vault auth credential.
+`InitIdentity` (in `core.go`) handles both paths: first run (generate keypair → lock → store → publish pubkey) and returning user (retrieve locked identity → decrypt → re-publish pubkey). The re-publish on unlock keeps the directory entry's display name current and self-heals entries published before names existed. The unlock password is intentionally separate from the Vault auth credential.
 
 ### ui
 
@@ -95,7 +95,9 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 `NewUnlockWindow` (in `unlock.go`) checks whether a locked identity exists in Vault asynchronously, then swaps the window body to show either a "set password" form (first run, with confirmation) or a "enter password" form (returning user). On submit, calls `core.InitIdentity` in a goroutine, then `onUnlock(app)` on the main thread.
 
-`NewMainWindow` (in `app.go`) is the item list/editor: HSplit master-detail with toolbar (new/refresh), search + type filter, and a status bar with retry. `fields.go` holds the descriptor table (`typeSpecs`) mapping each item type to its fields; both the read-only detail view (`detail.go`, mask/reveal/copy) and the editors (`editor.go`, including the custom-fields repeater) are generated from it. `model.go`'s `loadRows` processes the inbox, decrypts everything readable, turns decrypt failures into "unreadable" rows, and silently deletes dead SharedLinks (envelope 404 = missed revoke). Shared items are read-only in the UI.
+`NewMainWindow` (in `app.go`) is the item list/editor: HSplit master-detail with toolbar (new/refresh), search + type filter, and a status bar with retry. `fields.go` holds the descriptor table (`typeSpecs`) mapping each item type to its fields; both the read-only detail view (`detail.go`, mask/reveal/copy) and the editors (`editor.go`, including the custom-fields repeater) are generated from it. `model.go`'s `loadRows` processes the inbox, decrypts everything readable, fetches the directory name map, turns decrypt failures into "unreadable" rows, and silently deletes dead SharedLinks (envelope 404 = missed revoke). Shared items are read-only in the UI.
+
+`share.go` holds the sharing UI: an async "Sharing" section in owned items' detail views (access list from ShareRecords, per-recipient revoke with confirmation) and the share dialog (eligible recipients = directory minus self minus current recipients; duplicate/empty names disambiguated with an entity-ID prefix). Entity IDs never appear raw except as that fallback prefix.
 
 ## Conventions
 
@@ -113,7 +115,6 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 ## On the horizon
 
-- Share/revoke UI (feature 003; service methods and owner-side ShareRecords exist)
 - Password change flow (re-wrap locked identity under new Argon2id-derived key; no item re-encryption needed)
 - Key rotation flow (new keypair, re-wrap all item keys, republish public key)
 - Key export/import UI (`crypto.ExportKey`/`ImportKey` are implemented; UI is not)

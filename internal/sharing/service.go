@@ -45,6 +45,11 @@ func (s *Service) OpenOwnItem(_ context.Context, env Envelope) (items.Content, e
 	return OpenEnvelope(env, s.identity.EncryptionPriv, wk)
 }
 
+// Directory returns all published public keys with their display names.
+func (s *Service) Directory(ctx context.Context) ([]PublicKeyEntry, error) {
+	return s.store.ListPublicKeys(ctx)
+}
+
 // ListItems returns the owner's own item envelopes.
 func (s *Service) ListItems(ctx context.Context) ([]Envelope, error) {
 	return s.store.ListItems(ctx)

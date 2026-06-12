@@ -31,6 +31,11 @@ func InitIdentity(ctx context.Context, v *vault.Vault, password []byte) (*crypto
 	if err != nil {
 		return nil, err
 	}
+	// Re-publish the public key so the directory entry carries the current
+	// display name (entries published before names existed self-heal here).
+	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, v.DisplayName); err != nil {
+		return nil, fmt.Errorf("refreshing public key: %w", err)
+	}
 	return id, nil
 }
 
@@ -46,7 +51,7 @@ func createIdentity(ctx context.Context, v *vault.Vault, password []byte) (*cryp
 	if err := v.PutLockedIdentity(ctx, locked); err != nil {
 		return nil, fmt.Errorf("storing identity: %w", err)
 	}
-	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub); err != nil {
+	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, v.DisplayName); err != nil {
 		return nil, fmt.Errorf("publishing public key: %w", err)
 	}
 	return id, nil

@@ -23,17 +23,27 @@ type itemRow struct {
 }
 
 // loadRows processes the inbox, then loads and decrypts everything the user
-// can read. A row that fails to decrypt becomes an unreadable entry rather
-// than sinking the list; a shared link whose envelope is gone (missed revoke)
-// is deleted and omitted. Blocks on Vault I/O — never call on the main thread.
-func loadRows(ctx context.Context, app *core.App) ([]itemRow, error) {
+// can read, along with the directory's entityID → display-name map. A row
+// that fails to decrypt becomes an unreadable entry rather than sinking the
+// list; a shared link whose envelope is gone (missed revoke) is deleted and
+// omitted. Blocks on Vault I/O — never call on the main thread.
+func loadRows(ctx context.Context, app *core.App) ([]itemRow, map[string]string, error) {
 	if err := app.Service.ProcessInbox(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	dir, err := app.Service.Directory(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	names := make(map[string]string, len(dir))
+	for _, e := range dir {
+		names[e.EntityID] = e.Name
 	}
 
 	envs, err := app.Service.ListItems(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rows := make([]itemRow, 0, len(envs))
 	for _, env := range envs {
@@ -49,7 +59,7 @@ func loadRows(ctx context.Context, app *core.App) ([]itemRow, error) {
 
 	links, err := app.Service.ListSharedLinks(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, link := range links {
 		row := itemRow{ID: link.ShareID, Type: items.ItemType(link.ItemType), Shared: true, OwnerID: link.OwnerID}
@@ -58,7 +68,7 @@ func loadRows(ctx context.Context, app *core.App) ([]itemRow, error) {
 		case errors.Is(err, sharing.ErrNotFound):
 			// Dead link from a missed revoke — clean it up and skip the row.
 			if err := app.Service.DeleteSharedLink(ctx, link.ShareID); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			continue
 		case err != nil:
@@ -73,7 +83,7 @@ func loadRows(ctx context.Context, app *core.App) ([]itemRow, error) {
 	sort.Slice(rows, func(i, j int) bool {
 		return strings.ToLower(rows[i].Title) < strings.ToLower(rows[j].Title)
 	})
-	return rows, nil
+	return rows, names, nil
 }
 
 // matchesFilter reports whether a row passes the search string and type filter.

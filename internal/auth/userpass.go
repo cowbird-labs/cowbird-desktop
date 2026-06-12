@@ -52,8 +52,9 @@ func (u *Userpass) Authenticate(client *vault.Client, store credentials.Credenti
 	}
 
 	return Result{
-		Token:    resp.Auth.ClientToken,
-		EntityID: resp.Auth.EntityID,
+		Token:       resp.Auth.ClientToken,
+		EntityID:    resp.Auth.EntityID,
+		DisplayName: resp.Auth.Metadata["username"],
 	}, nil
 }
 

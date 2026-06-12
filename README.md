@@ -24,7 +24,7 @@ Cowbird is built for deployments with a **known, finite set of users** — a com
 - [x] **Unlock UI** — set-password (first run) and enter-password (returning user) flows; identity creation and unlock
 - [x] **Config & credential storage** — TOML config, OS-keyring credential store
 - [x] **Item list / editor UI** — searchable master-detail window: create/edit/delete for all six types with custom fields, masked sensitive values with reveal/copy, shared items read-only
-- [ ] **Share / revoke UI** — the service calls exist; no UI yet
+- [x] **Share / revoke UI** — share an owned item with a user picked by display name, see who has access, revoke per recipient; display names ride the auth identity and are published with public keys
 - [ ] **Password change flow** — crypto primitives exist; service layer and UI do not
 - [ ] **Key rotation flow** — same: primitives done, no service/UI
 - [ ] **Key export/import UI** — `crypto.ExportKey`/`ImportKey` are implemented; no UI
@@ -98,7 +98,7 @@ users/<entityID>/items/<itemID>    # owner's own items
 users/<entityID>/identity          # locked (encrypted) keypair
 users/<entityID>/links/<shareID>   # durable SharedLink records
 users/<entityID>/pinned            # encrypted pinned-keys record (reserved, not yet used)
-pubkeys/<entityID>                 # public-key directory (read-all, write-own)
+pubkeys/<entityID>                 # public keys + display names (read-all, write-own)
 shared/<ownerEntityID>/<shareID>   # shared item envelopes
 inbox/<recipientEntityID>/<msgID>  # transient share/revoke messages
 ```
