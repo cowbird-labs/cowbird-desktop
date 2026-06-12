@@ -63,7 +63,8 @@ jobs:
               mv cowbird/usr/local/bin/cowbird \
                  cowbird/usr/local/share/applications/*.desktop \
                  cowbird/usr/local/share/pixmaps/*.png staging/
-              tar -cJf "dist/cowbird-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.xz" -C staging .
+              tar -cJf "dist/cowbird-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.xz" \
+                  -C staging cowbird co.avitac.cowbird.desktop co.avitac.cowbird.png
               ;;
             windows-*) 7z a "dist/cowbird-${GITHUB_REF_NAME}-${{ matrix.target }}.zip" cowbird.exe ;;
             darwin-*)  ditto -c -k --keepParent cowbird.app "dist/cowbird-${GITHUB_REF_NAME}-${{ matrix.target }}.zip" ;;
