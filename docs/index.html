@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cowbird — a password manager that lays its eggs in someone else's nest</title>
+<meta name="description" content="Cowbird is an end-to-end encrypted password manager written in Go that uses HashiCorp Vault as its storage backend. No server of its own, no operator-side recovery.">
+<link rel="icon" type="image/png" sizes="58x58" href="icon-58.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+<meta property="og:title" content="cowbird">
+<meta property="og:description" content="An end-to-end encrypted password manager that uses HashiCorp Vault as its storage backend.">
+<meta property="og:image" content="icon-512.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0e0d1c;
+  --bg-raise: #161430;
+  --bg-card: #1a1838;
+  --border: #2c2954;
+  --text: #e8e6f2;
+  --text-dim: #a9a5c4;
+  --navy: #1f1d4e;
+  --purple: #462356;
+  --brown: #7c4c4e;
+  --accent: #c9908f;
+  --accent-bright: #e3b1ae;
+  --good: #8fd0a0;
+  --radius: 14px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+body {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-bright); }
+code, pre {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+code { background: var(--bg-raise); padding: 0.15em 0.4em; border-radius: 5px; border: 1px solid var(--border); }
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 1.5rem; }
+
+/* ---- nav ---- */
+nav {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(14, 13, 28, 0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.nav-inner { display: flex; align-items: center; gap: 1.5rem; height: 3.75rem; }
+.nav-brand { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; color: var(--text); font-size: 1.05rem; }
+.nav-brand img { width: 28px; height: 28px; background: #fff; border-radius: 7px; padding: 2px; }
+.nav-links { display: flex; gap: 1.25rem; margin-left: auto; align-items: center; }
+.nav-links a { color: var(--text-dim); font-size: 0.92rem; font-weight: 500; }
+.nav-links a:hover { color: var(--text); }
+.nav-gh {
+  border: 1px solid var(--border); border-radius: 8px; padding: 0.35rem 0.85rem;
+  color: var(--text) !important; background: var(--bg-raise);
+}
+.nav-gh:hover { border-color: var(--accent); }
+@media (max-width: 720px) { .nav-links a:not(.nav-gh) { display: none; } }
+
+/* ---- hero ---- */
+header {
+  position: relative;
+  padding: 5.5rem 0 4.5rem;
+  text-align: center;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% -10%, rgba(70, 35, 86, 0.55), transparent),
+    radial-gradient(ellipse 40% 35% at 80% 10%, rgba(124, 76, 78, 0.25), transparent);
+}
+.hero-icon {
+  width: 132px; height: 132px;
+  background: #fdfcfa;
+  border-radius: 30px;
+  padding: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45), 0 0 0 1px var(--border);
+  margin-bottom: 1.75rem;
+}
+header h1 {
+  font-size: clamp(2.6rem, 6vw, 4rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.tagline {
+  font-size: clamp(1.1rem, 2.5vw, 1.35rem);
+  color: var(--accent-bright);
+  font-weight: 500;
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+.hero-sub {
+  max-width: 620px; margin: 1.25rem auto 0;
+  color: var(--text-dim); font-size: 1.05rem;
+}
+.hero-cta { margin-top: 2.25rem; display: flex; gap: 0.9rem; justify-content: center; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.7rem 1.4rem; border-radius: 10px; font-weight: 600; font-size: 0.98rem;
+  transition: transform 0.1s ease, box-shadow 0.15s ease;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn-primary {
+  background: linear-gradient(135deg, var(--brown), var(--purple));
+  color: #fff; box-shadow: 0 4px 18px rgba(70, 35, 86, 0.5);
+}
+.btn-primary:hover { color: #fff; box-shadow: 0 6px 24px rgba(124, 76, 78, 0.5); }
+.btn-ghost { border: 1px solid var(--border); color: var(--text); background: var(--bg-raise); }
+.chips { margin-top: 2.5rem; display: flex; gap: 0.6rem; justify-content: center; flex-wrap: wrap; }
+.chip {
+  font-size: 0.82rem; font-weight: 500; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: 0.3rem 0.85rem;
+  background: var(--bg-raise);
+}
+
+/* ---- sections ---- */
+section { padding: 4.5rem 0; }
+section + section { border-top: 1px solid var(--border); }
+.kicker {
+  font-size: 0.8rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 0.6rem;
+}
+h2 { font-size: clamp(1.6rem, 3.5vw, 2.1rem); font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1rem; }
+.lede { color: var(--text-dim); max-width: 680px; margin-bottom: 2.5rem; font-size: 1.04rem; }
+
+.grid { display: grid; gap: 1.25rem; }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 860px) { .grid-3 { grid-template-columns: 1fr; } .grid-2 { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.6rem;
+}
+.card h3 { font-size: 1.08rem; font-weight: 600; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.6rem; }
+.card p { color: var(--text-dim); font-size: 0.95rem; }
+.card .glyph {
+  width: 34px; height: 34px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px; font-size: 1.05rem;
+  background: linear-gradient(135deg, rgba(124,76,78,0.35), rgba(70,35,86,0.45));
+  border: 1px solid var(--border);
+}
+
+pre.block {
+  background: #0a0918;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.4rem;
+  overflow-x: auto;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+pre.block .c { color: #6e6a8f; }
+pre.block .p { color: var(--accent-bright); }
+
+/* ---- steps ---- */
+.steps { counter-reset: step; display: grid; gap: 1rem; }
+.step {
+  display: flex; gap: 1.1rem; align-items: flex-start;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1.25rem 1.4rem;
+}
+.step::before {
+  counter-increment: step; content: counter(step);
+  flex: none; width: 2rem; height: 2rem;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; font-weight: 700; font-size: 0.9rem;
+  background: linear-gradient(135deg, var(--brown), var(--purple)); color: #fff;
+  margin-top: 0.15rem;
+}
+.step b { display: block; margin-bottom: 0.15rem; }
+.step p { color: var(--text-dim); font-size: 0.94rem; }
+
+/* ---- table ---- */
+table { width: 100%; border-collapse: collapse; font-size: 0.94rem; }
+th, td { text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); }
+th { color: var(--text-dim); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td { color: var(--text-dim); }
+.table-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
+tr:last-child td { border-bottom: none; }
+
+/* ---- status ---- */
+.status-list { list-style: none; columns: 2; column-gap: 2.5rem; }
+@media (max-width: 720px) { .status-list { columns: 1; } }
+.status-list li {
+  break-inside: avoid; display: flex; gap: 0.65rem; align-items: baseline;
+  padding: 0.45rem 0; color: var(--text-dim); font-size: 0.95rem;
+}
+.status-list .done::before { content: "✓"; color: var(--good); font-weight: 700; }
+.status-list .todo::before { content: "○"; color: var(--text-dim); }
+.status-list .done { color: var(--text); }
+
+/* ---- callout ---- */
+.callout {
+  background: linear-gradient(135deg, rgba(124,76,78,0.14), rgba(70,35,86,0.2));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1.5rem 1.75rem;
+  margin-top: 2rem;
+}
+.callout p { color: var(--text-dim); font-size: 0.97rem; }
+.callout b { color: var(--text); }
+
+/* ---- footer ---- */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 2.5rem 0 3rem;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+footer img { width: 40px; height: 40px; background: #fff; border-radius: 10px; padding: 3px; margin-bottom: 0.9rem; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="nav-brand" href="#"><img src="icon-58.png" alt="">cowbird</a>
+    <div class="nav-links">
+      <a href="#principles">Principles</a>
+      <a href="#encryption">Encryption</a>
+      <a href="#sharing">Sharing</a>
+      <a href="#trust">Trust model</a>
+      <a href="#status">Status</a>
+      <a class="nav-gh" href="https://github.com/avitacco/cowbird">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <img class="hero-icon" src="icon-512.png" alt="Cowbird icon">
+    <h1>cowbird</h1>
+    <p class="tagline">A password manager that lays its eggs in someone else's nest.</p>
+    <p class="hero-sub">
+      An end-to-end encrypted password manager written in Go that uses
+      <a href="https://www.vaultproject.io/">HashiCorp Vault</a> as its storage backend.
+      No server component of its own — just a client and the Vault you already run.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="https://github.com/avitacco/cowbird">View on GitHub</a>
+      <a class="btn btn-ghost" href="https://github.com/avitacco/cowbird/tree/main/specs/001-sharing-and-items">Read the design docs</a>
+    </div>
+    <div class="chips">
+      <span class="chip">Go 1.26</span>
+      <span class="chip">Fyne GUI</span>
+      <span class="chip">Vault KV v2</span>
+      <span class="chip">macOS · Linux · Windows</span>
+      <span class="chip">Mobile planned</span>
+    </div>
+  </div>
+</header>
+
+<section id="principles">
+  <div class="wrap">
+    <p class="kicker">Design intent</p>
+    <h2>Built for teams and families who run their own Vault</h2>
+    <p class="lede">
+      Cowbird targets deployments with a known, finite set of users — a company team or a
+      household — where each deployment runs its own Vault. Within that scope it makes
+      three promises.
+    </p>
+    <div class="grid grid-3">
+      <div class="card">
+        <h3><span class="glyph">🔒</span>End-to-end encrypted</h3>
+        <p>All item contents are encrypted on the client before they ever reach Vault.
+           The Vault operator can never read them — path ACLs are not the security
+           boundary, the cryptography is.</p>
+      </div>
+      <div class="card">
+        <h3><span class="glyph">🤝</span>Item sharing</h3>
+        <p>Share an individual item with another user, who can then read it — and see
+           your subsequent edits — without the content ever being re-encrypted per
+           recipient. Revoke access just as easily.</p>
+      </div>
+      <div class="card">
+        <h3><span class="glyph">🗝️</span>No operator recovery</h3>
+        <p>The only recovery mechanism is a user-initiated, passphrase-protected key
+           export. There is deliberately no admin reset: no one exists who could
+           perform one without also being able to read your data.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="encryption">
+  <div class="wrap">
+    <p class="kicker">Encryption</p>
+    <h2>Envelope encryption, modern primitives</h2>
+    <p class="lede">
+      Each item gets its own random 32-byte symmetric key. Content is encrypted once
+      with that item key; the item key is then wrapped to each authorized recipient's
+      public key. Granting access means wrapping one more key — content is never
+      re-encrypted.
+    </p>
+    <div class="table-card">
+      <table>
+        <tr><th>Purpose</th><th>Primitive</th><th>Notes</th></tr>
+        <tr>
+          <td>Content &amp; key encryption</td>
+          <td><code>XChaCha20-Poly1305</code></td>
+          <td>Authenticated encryption; decryption failures return a single generic error to avoid leaking failure mode</td>
+        </tr>
+        <tr>
+          <td>Key wrapping</td>
+          <td><code>X25519</code></td>
+          <td>Ephemeral ECDH + HKDF per wrap, via Go's stdlib <code>crypto/ecdh</code></td>
+        </tr>
+        <tr>
+          <td>Password-derived keys</td>
+          <td><code>Argon2id</code></td>
+          <td>time=3, memory=64&nbsp;MB, threads=4, with HKDF domain separation per use</td>
+        </tr>
+        <tr>
+          <td>Key fingerprint</td>
+          <td><code>SHA-256</code></td>
+          <td>Hex-encoded hash of the X25519 public key</td>
+        </tr>
+        <tr>
+          <td>Authorship signing</td>
+          <td><code>Ed25519</code></td>
+          <td>Deferred — envelope field reserved; only matters under an adversarial-operator model</td>
+        </tr>
+      </table>
+    </div>
+    <div class="callout">
+      <p><b>Private keys never leave the client in plaintext.</b> A user's keypair is
+      generated client-side on first run and stored in Vault only in locked form —
+      encrypted under an Argon2id-derived key. The unlock password is intentionally
+      separate from the Vault credential, so an operator-side credential reset cannot
+      decrypt anything.</p>
+    </div>
+  </div>
+</section>
+
+<section id="sharing">
+  <div class="wrap">
+    <p class="kicker">Sharing protocol</p>
+    <h2>One envelope, a private inbox, durable links</h2>
+    <p class="lede">
+      Shared envelopes live in a shared namespace as a single copy, so edits propagate
+      to every recipient without re-sharing. Per-recipient wrapped keys travel privately
+      through a consume-and-delete inbox — "who has access" never appears in the
+      shared-readable namespace.
+    </p>
+    <div class="grid grid-2">
+      <div class="steps">
+        <div class="step">
+          <div><b>Share</b>
+          <p>The owner writes the shared envelope and drops a message containing the
+             recipient's wrapped item key into the recipient's inbox — senders get
+             create-only access, so they can't read, list, or overwrite.</p></div>
+        </div>
+        <div class="step">
+          <div><b>Consume</b>
+          <p>The recipient's client consumes the message, writes a durable
+             <code>SharedLink</code> record into its own subtree, then deletes the
+             message. Processing is idempotent, so partial failures self-heal.</p></div>
+        </div>
+        <div class="step">
+          <div><b>Revoke</b>
+          <p>The owner removes the shared envelope — the real security action — and
+             drops a revoke message. A missed message degrades to a dead link, not
+             retained access.</p></div>
+        </div>
+      </div>
+      <div>
+        <pre class="block"><span class="c"># Vault storage layout (KV v2, mount: cowbird)</span>
+
+<span class="p">users/&lt;entityID&gt;/items/&lt;itemID&gt;</span>    <span class="c"># own items</span>
+<span class="p">users/&lt;entityID&gt;/identity</span>          <span class="c"># locked keypair</span>
+<span class="p">users/&lt;entityID&gt;/links/&lt;shareID&gt;</span>   <span class="c"># SharedLink records</span>
+<span class="p">pubkeys/&lt;entityID&gt;</span>                 <span class="c"># public-key directory</span>
+<span class="p">shared/&lt;ownerID&gt;/&lt;shareID&gt;</span>         <span class="c"># shared envelopes</span>
+<span class="p">inbox/&lt;recipientID&gt;/&lt;msgID&gt;</span>        <span class="c"># transient messages</span></pre>
+        <div class="callout" style="margin-top:1.25rem">
+          <p>All key names are opaque UUIDs — Vault list output is not ACL-filtered, so
+          nothing meaningful may appear in a key name. Per-entity access is enforced by
+          a templated Vault policy verified empirically against a live deployment.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="trust">
+  <div class="wrap">
+    <p class="kicker">Trust model</p>
+    <h2>Semi-trusted operator, honestly stated</h2>
+    <p class="lede">
+      The storage operator is technically prevented from reading item contents but
+      assumed not to actively forge user identities. In both target deployments the
+      operator is accountable and non-adversarial — a corporate Vault team, or you
+      yourself. Cowbird keeps the protections that cost users nothing and drops the
+      ceremony that users skip anyway.
+    </p>
+    <div class="table-card">
+      <table>
+        <tr><th>Secret</th><th>Purpose</th><th>Where it lives</th></tr>
+        <tr><td>Vault auth credential</td><td>Authenticates to Vault (userpass / token / AppRole)</td><td>OS keyring</td></tr>
+        <tr><td>Unlock password</td><td>Decrypts the user's private key</td><td>User's head only</td></tr>
+        <tr><td>Export passphrase</td><td>Protects an exported key file</td><td>User's head only</td></tr>
+      </table>
+    </div>
+    <div class="callout">
+      <p><b>Changing your unlock password</b> only re-wraps key material (cheap, frequent).
+      <b>Rotating your key</b> re-secures all items (expensive, for compromise scenarios).
+      Following the Bitwarden model, these are distinct operations by design.</p>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <p class="kicker">Status</p>
+    <h2>What works today</h2>
+    <p class="lede">
+      The crypto layer, item storage, sharing service, and the full desktop UI flow —
+      setup, unlock, item editing, share and revoke — are implemented and tested
+      against a live Vault deployment.
+    </p>
+    <ul class="status-list">
+      <li class="done">Crypto layer — KDF, AEAD, key wrapping, export/import</li>
+      <li class="done">Six item types with custom fields</li>
+      <li class="done">Vault integration &amp; auth (userpass / token / AppRole)</li>
+      <li class="done">Sharing service with idempotent inbox processing</li>
+      <li class="done">First-run setup &amp; unlock UI</li>
+      <li class="done">Item list / editor UI with search and masking</li>
+      <li class="done">Share / revoke UI with display names</li>
+      <li class="done">Reference Vault policy, verified live</li>
+      <li class="todo">Password change &amp; key rotation flows</li>
+      <li class="todo">Key export / import UI</li>
+      <li class="todo">CLI interface</li>
+      <li class="todo">Mobile builds (Android / iOS)</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <img src="icon-512.png" alt="">
+    <p>
+      <a href="https://github.com/avitacco/cowbird">github.com/avitacco/cowbird</a>
+      &nbsp;·&nbsp; Written in Go, built on HashiCorp Vault
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
