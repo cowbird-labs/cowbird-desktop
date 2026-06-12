@@ -181,6 +181,8 @@ pre.block .p { color: var(--accent-bright); }
 }
 .step b { display: block; margin-bottom: 0.15rem; }
 .step p { color: var(--text-dim); font-size: 0.94rem; }
+.step > div { flex: 1; min-width: 0; }
+.step pre.block { margin-top: 0.75rem; }
 
 /* ---- table ---- */
 table { width: 100%; border-collapse: collapse; font-size: 0.94rem; }
@@ -235,6 +237,7 @@ footer img { width: 40px; height: 40px; background: #fff; border-radius: 10px; p
       <a href="#encryption">Encryption</a>
       <a href="#sharing">Sharing</a>
       <a href="#trust">Trust model</a>
+      <a href="#vault-setup">Vault setup</a>
       <a href="#status">Status</a>
       <a class="nav-gh" href="https://github.com/avitacco/cowbird">GitHub</a>
     </div>
@@ -420,6 +423,84 @@ footer img { width: 40px; height: 40px; background: #fff; border-radius: 10px; p
       <p><b>Changing your unlock password</b> only re-wraps key material (cheap, frequent).
       <b>Rotating your key</b> re-secures all items (expensive, for compromise scenarios).
       Following the Bitwarden model, these are distinct operations by design.</p>
+    </div>
+  </div>
+</section>
+
+<section id="vault-setup">
+  <div class="wrap">
+    <p class="kicker">Vault setup</p>
+    <h2>Preparing a Vault for cowbird</h2>
+    <p class="lede">
+      Cowbird needs three things from your Vault: a KV v2 secrets engine, a templated
+      per-user policy, and an auth method for your users. The reference policy is
+      checked into the repo as
+      <a href="https://github.com/avitacco/cowbird/blob/main/cowbird-user-access.hcl"><code>cowbird-user-access.hcl</code></a>
+      and has been verified against a live deployment.
+    </p>
+    <div class="steps">
+      <div class="step">
+        <div><b>Enable a KV v2 secrets engine</b>
+        <p>Cowbird stores everything under a single KV v2 mount. The mount path is
+           configurable in the first-run setup screen; <code>cowbird</code> is the
+           conventional name.</p>
+        <pre class="block">vault secrets enable -path=cowbird -version=2 kv</pre></div>
+      </div>
+      <div class="step">
+        <div><b>Write the per-user policy</b>
+        <p>One policy serves every user. It uses <code>{{identity.entity.id}}</code>
+           templating, so each user's token resolves the same rules to their own
+           subtree — their items, identity, share links, and inbox.</p>
+        <pre class="block">vault policy write cowbird-user-access cowbird-user-access.hcl</pre></div>
+      </div>
+      <div class="step">
+        <div><b>Set up authentication</b>
+        <p>Cowbird authenticates with userpass, token, or AppRole — attach the policy
+           to whichever you use. With userpass, the username doubles as the display
+           name other users see when sharing:</p>
+        <pre class="block">vault auth enable userpass
+vault write auth/userpass/users/paul \
+    password='…' \
+    token_policies="cowbird-user-access"</pre>
+        <p style="margin-top:0.75rem">One caveat: userpass in Vault 2.0.0 emits no
+           group claims, so users can't inherit the policy by joining an identity
+           group — assign it per user via <code>token_policies</code> as above.</p></div>
+      </div>
+    </div>
+
+    <h3 style="font-size:1.15rem; font-weight:600; margin:2.5rem 0 1rem">What the policy grants</h3>
+    <div class="table-card">
+      <table>
+        <tr><th>Namespace</th><th>The user themselves</th><th>Everyone else</th></tr>
+        <tr>
+          <td><code>users/&lt;you&gt;/*</code></td>
+          <td>Full CRUD — items, locked identity, share links, share records</td>
+          <td>No access</td>
+        </tr>
+        <tr>
+          <td><code>pubkeys/*</code></td>
+          <td>Create, read, update own entry</td>
+          <td>Read and list all (public keys are public)</td>
+        </tr>
+        <tr>
+          <td><code>shared/&lt;you&gt;/*</code></td>
+          <td>Full CRUD on own shared envelopes</td>
+          <td>Read all — safe because contents are encrypted; the wrapped item key is the security boundary, not the path ACL</td>
+        </tr>
+        <tr>
+          <td><code>inbox/&lt;you&gt;/*</code></td>
+          <td>Read, list, delete own messages</td>
+          <td><b>Create only</b> — a sender can drop a new message but cannot read, list, or overwrite</td>
+        </tr>
+      </table>
+    </div>
+    <div class="callout">
+      <p><b>ACL gotcha if you adapt the policy:</b> Vault does <i>not</i> merge
+      capabilities across matching rules — the most specific matching path wins
+      outright. An exact templated path shadowed by a glob must repeat every
+      capability the glob would have granted. This is why the own-pubkey rule
+      repeats <code>read</code> even though <code>data/pubkeys/*</code> already
+      grants it.</p>
     </div>
   </div>
 </section>
