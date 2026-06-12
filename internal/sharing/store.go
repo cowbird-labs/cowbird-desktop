@@ -8,6 +8,16 @@ import (
 // ErrNotFound is returned by Store methods when a requested record does not exist.
 var ErrNotFound = errors.New("not found")
 
+// PublicKeyEntry is one entry in the public-key directory. Name is the
+// advisory display name published with the key; it may be empty (records
+// published before names existed) and is not authenticated — under the soft
+// trust model the operator could alter it, as they could the key itself.
+type PublicKeyEntry struct {
+	EntityID string
+	Pub      [32]byte
+	Name     string
+}
+
 // Store abstracts the storage backend for all sharing operations.
 // The Vault implementation lives in the vault package.
 //
@@ -23,7 +33,8 @@ type Store interface {
 
 	// Public-key directory (pubkeys/<entityID>; read-all, write-own)
 	GetPublicKey(ctx context.Context, entityID string) ([32]byte, error)
-	PutPublicKey(ctx context.Context, entityID string, pub [32]byte) error
+	PutPublicKey(ctx context.Context, entityID string, pub [32]byte, name string) error
+	ListPublicKeys(ctx context.Context) ([]PublicKeyEntry, error)
 
 	// Shared envelopes (shared/<ownerEntityID>/<shareID>; written by owner, readable by all)
 	// PutSharedEnvelope returns the storage version for use as an ordering tiebreaker

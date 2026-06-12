@@ -15,7 +15,7 @@ import (
 // mirroring the Vault paths that are not scoped to a single entity.
 type sharedState struct {
 	mu         sync.Mutex
-	pubkeys    map[string][32]byte           // entityID → pub
+	pubkeys    map[string]PublicKeyEntry     // entityID → entry
 	shared     map[string]Envelope           // shareID  → Envelope
 	sharedVers map[string]int64              // shareID  → version
 	inbox      map[string]map[string]Message // recipientID → msgID → Message
@@ -23,7 +23,7 @@ type sharedState struct {
 
 func newSharedState() *sharedState {
 	return &sharedState{
-		pubkeys:    make(map[string][32]byte),
+		pubkeys:    make(map[string]PublicKeyEntry),
 		shared:     make(map[string]Envelope),
 		sharedVers: make(map[string]int64),
 		inbox:      make(map[string]map[string]Message),
@@ -90,18 +90,28 @@ func (m *memStore) ListItems(_ context.Context) ([]Envelope, error) {
 func (m *memStore) GetPublicKey(_ context.Context, entityID string) ([32]byte, error) {
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
-	pub, ok := m.state.pubkeys[entityID]
+	entry, ok := m.state.pubkeys[entityID]
 	if !ok {
 		return [32]byte{}, ErrNotFound
 	}
-	return pub, nil
+	return entry.Pub, nil
 }
 
-func (m *memStore) PutPublicKey(_ context.Context, entityID string, pub [32]byte) error {
+func (m *memStore) PutPublicKey(_ context.Context, entityID string, pub [32]byte, name string) error {
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
-	m.state.pubkeys[entityID] = pub
+	m.state.pubkeys[entityID] = PublicKeyEntry{EntityID: entityID, Pub: pub, Name: name}
 	return nil
+}
+
+func (m *memStore) ListPublicKeys(_ context.Context) ([]PublicKeyEntry, error) {
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	out := make([]PublicKeyEntry, 0, len(m.state.pubkeys))
+	for _, entry := range m.state.pubkeys {
+		out = append(out, entry)
+	}
+	return out, nil
 }
 
 func (m *memStore) PutSharedEnvelope(_ context.Context, shareID string, env Envelope) (int64, error) {
@@ -260,8 +270,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	bobID := "bob-entity-id"
 
 	// Register both public keys in the shared directory.
-	state.pubkeys[aliceID] = alice.EncryptionPub
-	state.pubkeys[bobID] = bob.EncryptionPub
+	state.pubkeys[aliceID] = PublicKeyEntry{EntityID: aliceID, Pub: alice.EncryptionPub, Name: "Alice"}
+	state.pubkeys[bobID] = PublicKeyEntry{EntityID: bobID, Pub: bob.EncryptionPub, Name: "Bob"}
 
 	aliceStr := newMemStore(aliceID, state)
 	bobStr := newMemStore(bobID, state)
@@ -600,6 +610,21 @@ func TestDeleteSharedLinkCleansDeadLink(t *testing.T) {
 	// Cleaning an already-clean link is fine.
 	if err := te.bobSvc.DeleteSharedLink(te.ctx, "already-gone"); err != nil {
 		t.Fatalf("second delete should be a no-op: %v", err)
+	}
+}
+
+func TestDirectoryListsNames(t *testing.T) {
+	te := newTestEnv(t)
+	entries, err := te.aliceSvc.Directory(te.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make(map[string]string, len(entries))
+	for _, e := range entries {
+		names[e.EntityID] = e.Name
+	}
+	if names[te.aliceID] != "Alice" || names[te.bobID] != "Bob" {
+		t.Fatalf("unexpected directory contents: %v", names)
 	}
 }
 

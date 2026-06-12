@@ -14,9 +14,13 @@ type Field struct {
 }
 
 // Result  holds the output of a successful authentication.
+// DisplayName is the human-readable identity the auth backend reports
+// (userpass username, token display name, AppRole role name); it may be
+// empty, notably on renewal paths.
 type Result struct {
-	Token    string
-	EntityID string
+	Token       string
+	EntityID    string
+	DisplayName string
 }
 
 // Method is the interface each auth backend must implement.

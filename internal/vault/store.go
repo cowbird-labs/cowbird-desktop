@@ -153,14 +153,35 @@ func (v *Vault) GetPublicKey(ctx context.Context, entityID string) ([32]byte, er
 	return pub, nil
 }
 
-func (v *Vault) PutPublicKey(ctx context.Context, entityID string, pub [32]byte) error {
-	_, err := v.kvWrite(ctx, "pubkeys/"+entityID, pubkeyRecord{Pub: pub[:]})
+func (v *Vault) PutPublicKey(ctx context.Context, entityID string, pub [32]byte, name string) error {
+	_, err := v.kvWrite(ctx, "pubkeys/"+entityID, pubkeyRecord{Pub: pub[:], Name: name})
 	return err
 }
 
+func (v *Vault) ListPublicKeys(ctx context.Context) ([]sharing.PublicKeyEntry, error) {
+	keys, err := v.kvList(ctx, "pubkeys")
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]sharing.PublicKeyEntry, 0, len(keys))
+	for _, entityID := range keys {
+		var rec pubkeyRecord
+		if _, err := v.kvRead(ctx, "pubkeys/"+entityID, &rec); err != nil {
+			return nil, fmt.Errorf("reading pubkey %s: %w", entityID, err)
+		}
+		entry := sharing.PublicKeyEntry{EntityID: entityID, Name: rec.Name}
+		copy(entry.Pub[:], rec.Pub)
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 // pubkeyRecord is the at-rest form of a user's X25519 public key.
+// Name was added in 003; records published before it unmarshal with an
+// empty name.
 type pubkeyRecord struct {
-	Pub []byte `json:"pub"` // 32-byte X25519 public key, JSON-encoded as base64
+	Pub  []byte `json:"pub"` // 32-byte X25519 public key, JSON-encoded as base64
+	Name string `json:"name,omitempty"`
 }
 
 // --- shared envelopes (shared/<ownerEntityID>/<shareID>) ---------------------

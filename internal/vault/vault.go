@@ -16,13 +16,14 @@ import (
 )
 
 type Vault struct {
-	client   *vaultclient.Client
-	method   auth.Method
-	creds    credentials.CredentialStore
-	Mount    string
-	EntityID string
-	token    string
-	cancel   context.CancelFunc
+	client      *vaultclient.Client
+	method      auth.Method
+	creds       credentials.CredentialStore
+	Mount       string
+	EntityID    string
+	DisplayName string // human-readable name from the auth backend; may be empty
+	token       string
+	cancel      context.CancelFunc
 }
 
 func NewVault(
@@ -50,6 +51,7 @@ func NewVault(
 		return nil, fmt.Errorf("initial authentication: %w", err)
 	}
 	v.EntityID = result.EntityID
+	v.DisplayName = result.DisplayName
 
 	ctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel

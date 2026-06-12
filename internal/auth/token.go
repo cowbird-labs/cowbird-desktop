@@ -45,7 +45,8 @@ func (t *Token) Authenticate(client *vault.Client, store credentials.CredentialS
 	}
 
 	entityID, _ := resp.Data["entity_id"].(string)
-	return Result{Token: token, EntityID: entityID}, nil
+	displayName, _ := resp.Data["display_name"].(string)
+	return Result{Token: token, EntityID: entityID, DisplayName: displayName}, nil
 }
 
 func (t *Token) Renew(client *vault.Client, store credentials.CredentialStore, token string) (Result, error) {

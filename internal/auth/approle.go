@@ -54,8 +54,9 @@ func (a *AppRole) Authenticate(client *vault.Client, store credentials.Credentia
 	}
 
 	return Result{
-		Token:    resp.Auth.ClientToken,
-		EntityID: resp.Auth.EntityID,
+		Token:       resp.Auth.ClientToken,
+		EntityID:    resp.Auth.EntityID,
+		DisplayName: resp.Auth.Metadata["role_name"],
 	}, nil
 }
 
