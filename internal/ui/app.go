@@ -19,8 +19,9 @@ type mainWindow struct {
 	app *core.App
 	win fyne.Window
 
-	rows     []itemRow // everything loaded, sorted by title
-	filtered []itemRow // rows matching the current search/type filter
+	rows     []itemRow         // everything loaded, sorted by title
+	filtered []itemRow         // rows matching the current search/type filter
+	names    map[string]string // entityID → display name, from the directory
 
 	search     *widget.Entry
 	typeFilter *widget.Select
@@ -66,7 +67,7 @@ func (m *mainWindow) reload() {
 	m.retryBtn.Hide()
 
 	go func() {
-		rows, err := loadRows(context.Background(), m.app)
+		rows, names, err := loadRows(context.Background(), m.app)
 		fyne.Do(func() {
 			if err != nil {
 				m.status.SetText(fmt.Sprintf("Error loading items: %v", err))
@@ -75,6 +76,7 @@ func (m *mainWindow) reload() {
 			}
 			m.status.SetText("")
 			m.rows = rows
+			m.names = names
 			m.applyFilter()
 		})
 	}()

@@ -25,7 +25,7 @@ func (m *mainWindow) showDetail(row itemRow) {
 	header := widget.NewLabelWithStyle(row.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	subtitle := spec.display
 	if row.Shared {
-		subtitle += " · shared by " + row.OwnerID
+		subtitle += " · shared by " + m.displayName(row.OwnerID)
 	}
 	sub := widget.NewLabelWithStyle(subtitle, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 
@@ -46,9 +46,11 @@ func (m *mainWindow) showDetail(row itemRow) {
 		body.Add(m.buildFieldRow(cf.Label, cf.Value, sensitive))
 	}
 
-	// Owned items can be edited and deleted; shared items are read-only.
+	// Owned items can be shared, edited, and deleted; shared items are
+	// read-only (recipients cannot re-share).
 	if !row.Shared {
 		rowCopy := row
+		body.Add(m.buildSharingSection(rowCopy))
 		buttons := container.NewHBox(
 			widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
 				m.showEditor(rowCopy.Type, &rowCopy)
