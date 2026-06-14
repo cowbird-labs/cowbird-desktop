@@ -628,6 +628,80 @@ func TestDirectoryListsNames(t *testing.T) {
 	}
 }
 
+func TestRekeyRotatesAndPreservesAccess(t *testing.T) {
+	te := newTestEnv(t)
+	original := items.Login{Title: "Site", Username: "alice", Password: "s3cr3t"}
+
+	env, err := te.aliceSvc.CreateItem(te.ctx, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := te.aliceSvc.Share(te.ctx, env.ID, te.bobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	oldCiphertext := append([]byte(nil), env.Ciphertext...)
+
+	// Alice rotates to a fresh keypair.
+	newAlice, err := crypto.NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := te.aliceSvc.Rekey(te.ctx, te.alice.EncryptionPriv, newAlice.EncryptionPriv, newAlice.EncryptionPub); err != nil {
+		t.Fatal(err)
+	}
+
+	// Content is re-encrypted under a new item key.
+	migrated, err := te.aliceStr.GetItem(te.ctx, env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(migrated.Ciphertext) == string(oldCiphertext) {
+		t.Fatal("rotation must re-encrypt content under a fresh item key")
+	}
+
+	// The old key can no longer read it; the new key can.
+	if _, err := te.aliceSvc.OpenOwnItem(te.ctx, migrated); err == nil {
+		t.Fatal("old key must not decrypt rotated content")
+	}
+	newAliceSvc := NewService(te.aliceID, newAlice, te.aliceStr)
+	got, err := newAliceSvc.OpenOwnItem(te.ctx, migrated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.(items.Login).Password != original.Password {
+		t.Fatalf("content mismatch after rotation: %+v", got)
+	}
+
+	// Bob keeps access without re-sharing — he processes the re-key message.
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	links, _ := te.bobStr.ListSharedLinks(te.ctx)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(links))
+	}
+	shared, err := te.bobSvc.OpenSharedItem(te.ctx, links[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared.(items.Login).Password != original.Password {
+		t.Fatalf("recipient lost access after rotation: %+v", shared)
+	}
+
+	// Re-running rotation is idempotent: already-migrated items are not
+	// destructively re-encrypted and access holds.
+	if err := newAliceSvc.Rekey(te.ctx, te.alice.EncryptionPriv, newAlice.EncryptionPriv, newAlice.EncryptionPub); err != nil {
+		t.Fatalf("re-running rotation should be idempotent: %v", err)
+	}
+	migrated2, _ := te.aliceStr.GetItem(te.ctx, env.ID)
+	if _, err := newAliceSvc.OpenOwnItem(te.ctx, migrated2); err != nil {
+		t.Fatalf("item unreadable after idempotent re-run: %v", err)
+	}
+}
+
 func TestRevokeIdempotent(t *testing.T) {
 	te := newTestEnv(t)
 	env, err := te.aliceSvc.CreateItem(te.ctx, items.Custom{Title: "Thing"})

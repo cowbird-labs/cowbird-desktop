@@ -17,6 +17,7 @@ import (
 func (m *mainWindow) showMainMenu() {
 	menu := fyne.NewMenu("",
 		fyne.NewMenuItem("Change Password…", m.showChangePasswordDialog),
+		fyne.NewMenuItem("Rotate Key…", m.showRotateKeyDialog),
 	)
 	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(m.menuBtn)
 	pos.Y += m.menuBtn.Size().Height
@@ -95,6 +96,67 @@ func (m *mainWindow) showChangePasswordDialog() {
 				}
 				d.Hide()
 				dialog.ShowInformation("Password changed", "Your unlock password has been changed.", m.win)
+			})
+		}()
+	}
+
+	d.Show()
+}
+
+// showRotateKeyDialog presents the key-rotation flow: a compromise-recovery
+// warning plus a password confirmation. Rotation re-encrypts every owned item
+// under a new keypair and re-distributes shares, so it is gated behind an
+// explicit confirmation and may take a while.
+//
+// Like the change-password dialog this is a custom dialog so errors keep the
+// form open for retry — important here because rotation is resumable and a
+// retry finishes an interrupted run.
+func (m *mainWindow) showRotateKeyDialog() {
+	passwordEntry := widget.NewPasswordEntry()
+	passwordEntry.SetPlaceHolder("Unlock password")
+
+	errorLabel := widget.NewLabel("")
+	rotateBtn := widget.NewButton("Rotate Key", nil)
+
+	warning := widget.NewLabel(
+		"Rotate your key only if it may be compromised.\n\n" +
+			"Every item you own is re-encrypted under a new key and recipients\n" +
+			"are re-keyed automatically. Close any other open Cowbird sessions\n" +
+			"first. Items others shared with you must be re-shared by their\n" +
+			"owners afterward.\n\n" +
+			"Enter your unlock password to continue.")
+
+	content := container.NewVBox(
+		warning,
+		widget.NewSeparator(),
+		passwordEntry,
+		errorLabel,
+		rotateBtn,
+	)
+
+	d := dialog.NewCustom("Rotate Key", "Cancel", content, m.win)
+
+	rotateBtn.OnTapped = func() {
+		password := passwordEntry.Text
+		if password == "" {
+			errorLabel.SetText("Enter your unlock password.")
+			return
+		}
+
+		errorLabel.SetText("Rotating… this may take a moment.")
+		rotateBtn.Disable()
+
+		go func() {
+			err := core.RotateKey(context.Background(), m.app, []byte(password))
+			fyne.Do(func() {
+				if err != nil {
+					errorLabel.SetText(fmt.Sprintf("Error: %v", err))
+					rotateBtn.Enable()
+					return
+				}
+				d.Hide()
+				dialog.ShowInformation("Key rotated", "Your key has been rotated and your items re-secured.", m.win)
+				m.reload()
 			})
 		}()
 	}
