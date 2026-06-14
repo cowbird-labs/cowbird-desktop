@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"image/color"
+
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
@@ -10,10 +13,20 @@ const allTypesOption = "All types"
 
 const unreadableTitle = "(unreadable item)"
 
+// rowStripeColor tints every other list row for readability. A translucent
+// mid-gray reads as slightly darker on light themes and slightly lighter on
+// dark ones, and its low alpha lets the selection highlight (drawn behind the
+// row) still show through on a striped row.
+var rowStripeColor = color.NRGBA{R: 128, G: 128, B: 128, A: 0x16}
+
 // buildListPane creates the left pane: search entry, type filter, and the
 // item list with an empty-state fallback.
 func (m *mainWindow) buildListPane() fyne.CanvasObject {
-	m.search = widget.NewEntry()
+	// Escape clears the search and resets the type filter to "All types".
+	m.search = newEscapableTextEntry(func() {
+		m.search.SetText("")
+		m.typeFilter.SetSelected(allTypesOption)
+	})
 	m.search.SetPlaceHolder("Search…")
 	m.search.OnChanged = func(string) { m.applyFilter() }
 
@@ -33,7 +46,8 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 			title := widget.NewLabel("")
 			title.Truncation = fyne.TextTruncateEllipsis
 			badge := widget.NewLabelWithStyle("", fyne.TextAlignTrailing, fyne.TextStyle{Italic: true})
-			return container.NewBorder(nil, nil, nil, badge, title)
+			stripe := canvas.NewRectangle(color.Transparent)
+			return container.NewStack(stripe, container.NewBorder(nil, nil, nil, badge, title))
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			if i >= len(m.filtered) {
@@ -41,8 +55,17 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 			}
 			row := m.filtered[i]
 			box := o.(*fyne.Container)
-			title := box.Objects[0].(*widget.Label)
-			badge := box.Objects[1].(*widget.Label)
+			stripe := box.Objects[0].(*canvas.Rectangle)
+			content := box.Objects[1].(*fyne.Container)
+			title := content.Objects[0].(*widget.Label)
+			badge := content.Objects[1].(*widget.Label)
+
+			if i%2 == 1 {
+				stripe.FillColor = rowStripeColor
+			} else {
+				stripe.FillColor = color.Transparent
+			}
+			stripe.Refresh()
 
 			if row.Err != nil {
 				title.SetText(unreadableTitle)

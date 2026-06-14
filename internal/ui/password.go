@@ -16,9 +16,9 @@ import (
 // button. New app-level actions (export key, etc.) hang off this menu.
 func (m *mainWindow) showMainMenu() {
 	menu := fyne.NewMenu("",
-		fyne.NewMenuItem("Change Password…", m.showChangePasswordDialog),
-		fyne.NewMenuItem("Rotate Key…", m.showRotateKeyDialog),
-		fyne.NewMenuItem("Export Recovery Key…", m.showExportKeyDialog),
+		fyne.NewMenuItem("Change Password", m.showChangePasswordDialog),
+		fyne.NewMenuItem("Rotate Key", m.showRotateKeyDialog),
+		fyne.NewMenuItem("Export Recovery Key", m.showExportKeyDialog),
 	)
 	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(m.menuBtn)
 	pos.Y += m.menuBtn.Size().Height
@@ -34,11 +34,14 @@ func (m *mainWindow) showMainMenu() {
 // failed Vault write keep the form open for retry rather than discarding the
 // user's typed passwords.
 func (m *mainWindow) showChangePasswordDialog() {
-	currentEntry := widget.NewPasswordEntry()
+	var d dialog.Dialog
+	dismiss := func() { d.Hide() }
+
+	currentEntry := newEscapableEntry(dismiss)
 	currentEntry.SetPlaceHolder("Current password")
-	newEntry := widget.NewPasswordEntry()
+	newEntry := newEscapableEntry(dismiss)
 	newEntry.SetPlaceHolder("New password")
-	confirmEntry := widget.NewPasswordEntry()
+	confirmEntry := newEscapableEntry(dismiss)
 	confirmEntry.SetPlaceHolder("Confirm new password")
 
 	strengthLabel := ""
@@ -64,9 +67,9 @@ func (m *mainWindow) showChangePasswordDialog() {
 		changeBtn,
 	)
 
-	d := dialog.NewCustom("Change Unlock Password", "Cancel", content, m.win)
+	d = dialog.NewCustom("Change Unlock Password", "Cancel", content, m.win)
 
-	changeBtn.OnTapped = func() {
+	change := func() {
 		current := currentEntry.Text
 		next := newEntry.Text
 		switch {
@@ -100,8 +103,13 @@ func (m *mainWindow) showChangePasswordDialog() {
 			})
 		}()
 	}
+	changeBtn.OnTapped = change
+	currentEntry.OnSubmitted = func(string) { m.win.Canvas().Focus(newEntry) }
+	newEntry.OnSubmitted = func(string) { m.win.Canvas().Focus(confirmEntry) }
+	confirmEntry.OnSubmitted = func(string) { change() }
 
 	d.Show()
+	m.win.Canvas().Focus(currentEntry)
 }
 
 // showRotateKeyDialog presents the key-rotation flow: a compromise-recovery
@@ -113,7 +121,9 @@ func (m *mainWindow) showChangePasswordDialog() {
 // form open for retry — important here because rotation is resumable and a
 // retry finishes an interrupted run.
 func (m *mainWindow) showRotateKeyDialog() {
-	passwordEntry := widget.NewPasswordEntry()
+	var d dialog.Dialog
+
+	passwordEntry := newEscapableEntry(func() { d.Hide() })
 	passwordEntry.SetPlaceHolder("Unlock password")
 
 	errorLabel := widget.NewLabel("")
@@ -135,9 +145,9 @@ func (m *mainWindow) showRotateKeyDialog() {
 		rotateBtn,
 	)
 
-	d := dialog.NewCustom("Rotate Key", "Cancel", content, m.win)
+	d = dialog.NewCustom("Rotate Key", "Cancel", content, m.win)
 
-	rotateBtn.OnTapped = func() {
+	rotate := func() {
 		password := passwordEntry.Text
 		if password == "" {
 			errorLabel.SetText("Enter your unlock password.")
@@ -161,8 +171,45 @@ func (m *mainWindow) showRotateKeyDialog() {
 			})
 		}()
 	}
+	rotateBtn.OnTapped = rotate
+	passwordEntry.OnSubmitted = func(string) { rotate() }
 
 	d.Show()
+	m.win.Canvas().Focus(passwordEntry)
+}
+
+// escapableEntry is an entry that invokes onEscape when Escape is pressed while
+// it has focus. Fyne routes key events only to the focused widget and its modal
+// dialogs do not dismiss on Escape themselves, so an entry must forward Escape
+// to drive that behaviour.
+type escapableEntry struct {
+	widget.Entry
+	onEscape func()
+}
+
+// newEscapableEntry builds a password-masked escapable entry (for dialogs).
+func newEscapableEntry(onEscape func()) *escapableEntry {
+	e := newEscapableTextEntry(onEscape)
+	e.Password = true
+	e.Refresh()
+	return e
+}
+
+// newEscapableTextEntry builds a plain (unmasked) escapable entry.
+func newEscapableTextEntry(onEscape func()) *escapableEntry {
+	e := &escapableEntry{onEscape: onEscape}
+	e.ExtendBaseWidget(e)
+	return e
+}
+
+func (e *escapableEntry) TypedKey(key *fyne.KeyEvent) {
+	if key.Name == fyne.KeyEscape {
+		if e.onEscape != nil {
+			e.onEscape()
+		}
+		return
+	}
+	e.Entry.TypedKey(key)
 }
 
 // showExportKeyDialog presents the recovery-key export flow: an authorization
@@ -170,11 +217,14 @@ func (m *mainWindow) showRotateKeyDialog() {
 // success it opens a file-save dialog and writes the passphrase-encrypted key.
 // Custom dialog so auth/validation errors keep the form open for retry.
 func (m *mainWindow) showExportKeyDialog() {
-	unlockEntry := widget.NewPasswordEntry()
+	var d dialog.Dialog
+	dismiss := func() { d.Hide() }
+
+	unlockEntry := newEscapableEntry(dismiss)
 	unlockEntry.SetPlaceHolder("Current unlock password")
-	passEntry := widget.NewPasswordEntry()
+	passEntry := newEscapableEntry(dismiss)
 	passEntry.SetPlaceHolder("Export passphrase")
-	confirmEntry := widget.NewPasswordEntry()
+	confirmEntry := newEscapableEntry(dismiss)
 	confirmEntry.SetPlaceHolder("Confirm export passphrase")
 
 	strengthLabel := ""
@@ -203,9 +253,9 @@ func (m *mainWindow) showExportKeyDialog() {
 		exportBtn,
 	)
 
-	d := dialog.NewCustom("Export Recovery Key", "Cancel", content, m.win)
+	d = dialog.NewCustom("Export Recovery Key", "Cancel", content, m.win)
 
-	exportBtn.OnTapped = func() {
+	export := func() {
 		unlock := unlockEntry.Text
 		pass := passEntry.Text
 		switch {
@@ -236,8 +286,13 @@ func (m *mainWindow) showExportKeyDialog() {
 			})
 		}()
 	}
+	exportBtn.OnTapped = export
+	unlockEntry.OnSubmitted = func(string) { m.win.Canvas().Focus(passEntry) }
+	passEntry.OnSubmitted = func(string) { m.win.Canvas().Focus(confirmEntry) }
+	confirmEntry.OnSubmitted = func(string) { export() }
 
 	d.Show()
+	m.win.Canvas().Focus(unlockEntry)
 }
 
 // saveRecoveryFile prompts for a location and writes the recovery bytes there.
