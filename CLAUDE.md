@@ -89,6 +89,8 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 `InitIdentity` (in `core.go`) handles both paths: first run (generate keypair → lock → store → publish pubkey) and returning user (retrieve locked identity → decrypt → re-publish pubkey). The re-publish on unlock keeps the directory entry's display name current and self-heals entries published before names existed. The unlock password is intentionally separate from the Vault auth credential.
 
+`ChangePassword` (in `core.go`) re-wraps the stored locked identity under a new Argon2id-derived key: load the locked identity, unlock with the old password (verifies it; generic error on mismatch), re-lock with the new password (fresh salt), and write back in a single replacement `PutLockedIdentity`. The keypair is unchanged, so no item contents are re-encrypted and the live session stays valid; a write failure leaves the old record intact and unlockable. UI is `ui/password.go`'s change-password dialog, reached from the main window's hamburger menu (`showMainMenu`, popup anchored to the menu button).
+
 ### ui
 
 `NewSetupWindow` handles the first-run flow: collects vault address, mount path, auth method, and credentials; validates; authenticates; verifies mount access; saves config; opens the main window.
@@ -116,7 +118,6 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 ## On the horizon
 
-- Password change flow (re-wrap locked identity under new Argon2id-derived key; no item re-encryption needed)
 - Key rotation flow (new keypair, re-wrap all item keys, republish public key)
 - Key export/import UI (`crypto.ExportKey`/`ImportKey` are implemented; UI is not)
 - Vault policy update: confirm `users/<eid>/identity`, `users/<eid>/links/*`, and `users/<eid>/shares/*` paths (one self-subtree rule covers all); confirm inbox hard-delete on metadata path
