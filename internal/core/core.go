@@ -171,6 +171,79 @@ func completeInterruptedRotation(ctx context.Context, v *vault.Vault, canonical 
 	return v.DeletePrevLockedIdentity(ctx)
 }
 
+// ErrIdentityMismatch is returned by ImportIdentity when the recovery file's
+// keypair does not match the user's published public key — importing it would
+// overwrite the identity their items are wrapped to. The caller may retry with
+// force=true to override after confirming with the user.
+var ErrIdentityMismatch = errors.New("recovery file is for a different identity")
+
+// ImportIdentity restores a keypair from a passphrase-protected recovery file
+// and installs it as the Vault-stored locked identity, re-locked under a new
+// unlock password. It is the recovery counterpart to ExportIdentity, run from
+// the unlock window when the user cannot sign in normally.
+//
+// Before overwriting an existing identity it compares the recovered public key
+// with the user's published public key; on mismatch it returns
+// ErrIdentityMismatch unless force is set. The private key is persisted only in
+// locked form. Any stale key-rotation marker is cleared, since the imported
+// identity is a fresh starting point.
+func ImportIdentity(ctx context.Context, v *vault.Vault, data, exportPassphrase, newUnlockPassword []byte, force bool) (*crypto.Identity, error) {
+	id, err := crypto.ImportKey(data, exportPassphrase)
+	if err != nil {
+		return nil, err
+	}
+
+	// Safety check: refuse to overwrite a different identity unless forced.
+	switch existingPub, err := v.GetPublicKey(ctx, v.EntityID); {
+	case errors.Is(err, sharing.ErrNotFound):
+		// No published key (fresh/cleared Vault) — nothing to conflict with.
+	case err != nil:
+		return nil, fmt.Errorf("checking published key: %w", err)
+	case existingPub != id.EncryptionPub && !force:
+		return nil, ErrIdentityMismatch
+	}
+
+	locked, err := crypto.LockIdentity(id, newUnlockPassword)
+	if err != nil {
+		return nil, fmt.Errorf("locking identity: %w", err)
+	}
+	if err := v.PutLockedIdentity(ctx, locked); err != nil {
+		return nil, fmt.Errorf("storing identity: %w", err)
+	}
+	// Clear any in-progress rotation marker: it is locked under the old unlock
+	// password and would otherwise block the next unlock.
+	if err := v.DeletePrevLockedIdentity(ctx); err != nil && !errors.Is(err, sharing.ErrNotFound) {
+		return nil, fmt.Errorf("clearing rotation marker: %w", err)
+	}
+	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, v.DisplayName); err != nil {
+		return nil, fmt.Errorf("publishing public key: %w", err)
+	}
+	return id, nil
+}
+
+// ExportIdentity produces a passphrase-protected recovery file for the user's
+// keypair. It is gated behind the current unlock password: the stored locked
+// identity is decrypted with unlockPassword (verifies it; generic error on
+// mismatch), then the verified identity is exported under a separate
+// exportPassphrase. The returned bytes are the file contents; writing them to a
+// location is the caller's responsibility. Nothing is written to Vault, and the
+// private key is never serialized except in the passphrase-encrypted form.
+func ExportIdentity(ctx context.Context, app *App, unlockPassword, exportPassphrase []byte) ([]byte, error) {
+	locked, err := app.Vault.GetLockedIdentity(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading identity: %w", err)
+	}
+	id, err := crypto.UnlockIdentity(locked, unlockPassword)
+	if err != nil {
+		return nil, err
+	}
+	data, err := crypto.ExportKey(id, exportPassphrase)
+	if err != nil {
+		return nil, fmt.Errorf("exporting key: %w", err)
+	}
+	return data, nil
+}
+
 func createIdentity(ctx context.Context, v *vault.Vault, password []byte) (*crypto.Identity, error) {
 	id, err := crypto.NewIdentity()
 	if err != nil {
