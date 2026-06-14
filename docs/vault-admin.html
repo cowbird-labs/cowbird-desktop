@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cowbird — Vault administrator setup guide</title>
+<meta name="description" content="A complete guide for Vault administrators deploying cowbird: KV v2 engine, the per-user templated policy, policy assignment via identity groups, the userpass group-claim limitation, and day-to-day userpass user management.">
+<link rel="icon" type="image/png" sizes="58x58" href="icon-58.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+<meta property="og:title" content="cowbird — Vault administrator setup guide">
+<meta property="og:description" content="Complete Vault setup for cowbird: KV engine, policy, groups & auto-assignment, and userpass user management.">
+<meta property="og:image" content="icon-512.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+/* admin-guide-specific extras */
+header.doc { padding: 3.5rem 0 2.75rem; text-align: left; }
+header.doc h1 { font-size: clamp(2rem, 4.5vw, 2.9rem); }
+.backlink { display: inline-block; color: var(--text-dim); font-size: 0.9rem; font-weight: 500; margin-bottom: 1.25rem; }
+.backlink:hover { color: var(--text); }
+section { padding: 3.25rem 0; }
+section h3 { font-size: 1.15rem; font-weight: 600; margin: 2.25rem 0 0.85rem; }
+section h3:first-of-type { margin-top: 1rem; }
+section p + p { margin-top: 0.85rem; }
+section .lede { margin-bottom: 1.75rem; }
+ul.plain { margin: 0.5rem 0 0 1.2rem; color: var(--text-dim); font-size: 0.96rem; }
+ul.plain li { margin: 0.35rem 0; }
+.callout.warn {
+  border-left-color: var(--accent-bright);
+  background: linear-gradient(135deg, rgba(124,76,78,0.24), rgba(70,35,86,0.16));
+}
+.toc { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.5rem; }
+.toc a {
+  font-size: 0.85rem; font-weight: 500; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: 0.3rem 0.85rem;
+  background: var(--bg-raise);
+}
+.toc a:hover { color: var(--text); border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="nav-brand" href="index.html"><img src="icon-58.png" alt="">cowbird</a>
+    <div class="nav-links">
+      <a href="#overview">Overview</a>
+      <a href="#kv">KV engine</a>
+      <a href="#policy">Policy</a>
+      <a href="#auth">Auth</a>
+      <a href="#assignment">Groups</a>
+      <a href="#users">Users</a>
+      <a class="nav-gh" href="https://github.com/avitacco/cowbird">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="doc">
+  <div class="wrap">
+    <a class="backlink" href="index.html">← Back to overview</a>
+    <p class="kicker">Administrator guide</p>
+    <h1>Setting up Vault for cowbird</h1>
+    <p class="hero-sub" style="margin-left:0">
+      Everything a Vault administrator needs to stand up cowbird for a team or family:
+      the KV&nbsp;v2 engine, the per-user policy, how to assign that policy (and why
+      hands-off auto-enrollment behaves the way it does with userpass), and how to
+      manage userpass users day to day.
+    </p>
+    <div class="toc">
+      <a href="#overview">What Vault provides</a>
+      <a href="#prereqs">Prerequisites</a>
+      <a href="#kv">1 · KV v2 engine</a>
+      <a href="#policy">2 · Per-user policy</a>
+      <a href="#auth">3 · Auth method</a>
+      <a href="#assignment">4 · Groups &amp; auto-assignment</a>
+      <a href="#users">5 · Managing userpass users</a>
+      <a href="#verify">6 · Verifying a user</a>
+      <a href="#gotchas">Operational notes</a>
+    </div>
+  </div>
+</header>
+
+<section id="overview">
+  <div class="wrap">
+    <p class="kicker">Overview</p>
+    <h2>What cowbird needs from Vault</h2>
+    <p class="lede">
+      Cowbird has no server of its own — every client talks directly to your Vault.
+      The administrator's job is to give each user a Vault login that resolves to a
+      single, shared, identity-templated policy. Everything else (encryption, sharing,
+      recovery) happens client-side.
+    </p>
+    <div class="grid grid-3">
+      <div class="card">
+        <h3><span class="glyph">📦</span>A KV v2 mount</h3>
+        <p>One Key/Value version-2 secrets engine — conventionally mounted at
+           <code>cowbird</code> — holds every user's items, locked identity, share
+           links, public keys, shared envelopes, and inbox messages.</p>
+      </div>
+      <div class="card">
+        <h3><span class="glyph">📜</span>One templated policy</h3>
+        <p>A single policy, <code>cowbird-user-access</code>, uses
+           <code>{{identity.entity.id}}</code> templating so the same rules resolve to
+           each user's own subtree. You write it once and assign it to everyone.</p>
+      </div>
+      <div class="card">
+        <h3><span class="glyph">🔑</span>An auth method</h3>
+        <p>userpass, token, or AppRole. With userpass — the common choice — the
+           username doubles as the display name other users see when sharing, so pick
+           human-friendly names.</p>
+      </div>
+    </div>
+    <div class="callout">
+      <p><b>Trust boundary:</b> Vault path ACLs are <i>not</i> the security boundary for
+      item contents — the per-recipient wrapped key is. Item contents are encrypted on
+      the client before they reach Vault, so even broad read access (as the policy
+      grants on the public-key and shared namespaces) never exposes a secret. The policy
+      exists to scope <i>writes</i> and keep users out of each other's private subtrees,
+      not to keep contents confidential.</p>
+    </div>
+  </div>
+</section>
+
+<section id="prereqs">
+  <div class="wrap">
+    <p class="kicker">Prerequisites</p>
+    <h2>Before you start</h2>
+    <ul class="plain">
+      <li>A running Vault you can administer, reachable from your users' machines
+          (e.g. <code>https://vault.example.com:8200</code>).</li>
+      <li>The <code>vault</code> CLI authenticated with a token that can manage secrets
+          engines, policies, identities, and auth methods. (<code>jq</code> is handy for
+          the entity/group recipes below but not required.)</li>
+      <li>Set your environment once so the commands below work as written:</li>
+    </ul>
+    <pre class="block">export VAULT_ADDR="https://vault.example.com:8200"
+vault login            <span class="c"># as an admin token</span></pre>
+    <div class="callout warn">
+      <p><b>Version note.</b> These instructions were verified against Vault 2.0.0 with
+      the userpass auth method. The one behaviour that bites people — userpass not
+      emitting group membership — is covered in detail under
+      <a href="#assignment">Groups &amp; auto-assignment</a>. If you run a different
+      version or auth method, the policy and KV steps are unchanged; only how you
+      <i>assign</i> the policy may differ.</p>
+    </div>
+  </div>
+</section>
+
+<section id="kv">
+  <div class="wrap">
+    <p class="kicker">Step 1</p>
+    <h2>Enable the KV v2 secrets engine</h2>
+    <p class="lede">
+      Cowbird keeps everything under a single KV v2 mount. The mount path is configurable
+      in the app's first-run setup screen; <code>cowbird</code> is the conventional name
+      and is assumed throughout this guide and in the reference policy.
+    </p>
+    <pre class="block">vault secrets enable -path=cowbird -version=2 kv</pre>
+    <h3>Storage layout</h3>
+    <p>Once users start using the app, the mount fills in with these paths. You never
+       create these by hand — clients write them — but knowing the shape makes the policy
+       and any troubleshooting legible:</p>
+    <pre class="block"><span class="p">users/&lt;entityID&gt;/items/&lt;itemID&gt;</span>     <span class="c"># a user's own items</span>
+<span class="p">users/&lt;entityID&gt;/identity</span>           <span class="c"># locked (encrypted) keypair</span>
+<span class="p">users/&lt;entityID&gt;/identity.prev</span>      <span class="c"># transient slot during key rotation</span>
+<span class="p">users/&lt;entityID&gt;/links/&lt;shareID&gt;</span>    <span class="c"># durable SharedLink records</span>
+<span class="p">users/&lt;entityID&gt;/shares/&lt;shareID&gt;</span>   <span class="c"># a user's outgoing ShareRecords</span>
+<span class="p">pubkeys/&lt;entityID&gt;</span>                  <span class="c"># public keys + display names</span>
+<span class="p">shared/&lt;ownerID&gt;/&lt;shareID&gt;</span>          <span class="c"># shared item envelopes</span>
+<span class="p">inbox/&lt;recipientID&gt;/&lt;msgID&gt;</span>         <span class="c"># transient share/revoke messages</span></pre>
+    <div class="callout">
+      <p><b>All key names are opaque UUIDs.</b> Vault's <code>list</code> output is not
+      ACL-filtered, so anything in a key name is visible to anyone who can list that
+      prefix. Cowbird therefore puts no human-readable data in key names — entity IDs,
+      share IDs, and message IDs are all opaque. Keep it that way if you script anything
+      against this mount.</p>
+    </div>
+  </div>
+</section>
+
+<section id="policy">
+  <div class="wrap">
+    <p class="kicker">Step 2</p>
+    <h2>Write the per-user policy</h2>
+    <p class="lede">
+      One policy serves every user. It uses <code>{{identity.entity.id}}</code>
+      templating, so each user's token resolves the same rules against their own subtree.
+      The reference policy is checked into the repository as
+      <a href="https://github.com/avitacco/cowbird/blob/main/cowbird-user-access.hcl"><code>cowbird-user-access.hcl</code></a>;
+      keep the live policy and that file in sync.
+    </p>
+    <pre class="block">vault policy write cowbird-user-access cowbird-user-access.hcl</pre>
+
+    <h3>The policy, block by block</h3>
+    <pre class="block"><span class="c"># --- own subtree: items, identity, links, share records ---</span>
+path "cowbird/data/users/{{identity.entity.id}}/*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+path "cowbird/metadata/users/{{identity.entity.id}}/*" {
+  capabilities = ["list", "delete"]
+}
+
+<span class="c"># --- public-key directory: read/list all, write own ---</span>
+path "cowbird/data/pubkeys/*" {
+  capabilities = ["read"]
+}
+path "cowbird/metadata/pubkeys" {
+  capabilities = ["list"]
+}
+<span class="c"># Exact match shadows the data/pubkeys/* glob, so "read" must be</span>
+<span class="c"># repeated here or reading one's own entry is denied.</span>
+path "cowbird/data/pubkeys/{{identity.entity.id}}" {
+  capabilities = ["create", "read", "update"]
+}
+
+<span class="c"># --- shared envelopes: read all, owner-managed ---</span>
+path "cowbird/data/shared/*" {
+  capabilities = ["read"]
+}
+path "cowbird/data/shared/{{identity.entity.id}}/*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+path "cowbird/metadata/shared/{{identity.entity.id}}/*" {
+  capabilities = ["list", "delete"]
+}
+
+<span class="c"># --- inbox: recipient reads/deletes own; senders may only create ---</span>
+path "cowbird/data/inbox/{{identity.entity.id}}/*" {
+  capabilities = ["read", "delete"]
+}
+path "cowbird/metadata/inbox/{{identity.entity.id}}/*" {
+  capabilities = ["list", "delete"]
+}
+path "cowbird/data/inbox/+/*" {
+  capabilities = ["create"]
+}</pre>
+
+    <h3>What it grants</h3>
+    <div class="table-card">
+      <table>
+        <tr><th>Namespace</th><th>The user themselves</th><th>Everyone else</th></tr>
+        <tr>
+          <td><code>users/&lt;you&gt;/*</code></td>
+          <td>Full CRUD — items, locked identity, share links, share records</td>
+          <td>No access</td>
+        </tr>
+        <tr>
+          <td><code>pubkeys/*</code></td>
+          <td>Create, read, update own entry</td>
+          <td>Read and list all (public keys are public)</td>
+        </tr>
+        <tr>
+          <td><code>shared/&lt;you&gt;/*</code></td>
+          <td>Full CRUD on own shared envelopes</td>
+          <td>Read all — safe because contents are encrypted</td>
+        </tr>
+        <tr>
+          <td><code>inbox/&lt;you&gt;/*</code></td>
+          <td>Read, list, delete own messages</td>
+          <td><b>Create only</b> — a sender drops a message but cannot read, list, or overwrite</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <p><b>ACL gotcha if you adapt the policy:</b> Vault does <i>not</i> merge
+      capabilities across matching rules — the most specific matching path wins
+      outright. An exact templated path shadowed by a glob must repeat every capability
+      the glob would have granted. That is exactly why the own-pubkey rule
+      (<code>data/pubkeys/{{identity.entity.id}}</code>) repeats <code>read</code> even
+      though <code>data/pubkeys/*</code> already grants it — without that repeat, a user
+      can read everyone's public key but not their own. The <code>create</code>-only
+      <code>inbox/+/*</code> sender rule relies on the same precedence: a user's own
+      templated inbox rules win for their own inbox, while the wildcard governs everyone
+      else's.</p>
+    </div>
+  </div>
+</section>
+
+<section id="auth">
+  <div class="wrap">
+    <p class="kicker">Step 3</p>
+    <h2>Enable an auth method</h2>
+    <p class="lede">
+      Cowbird authenticates with userpass, token, or AppRole. userpass is the usual
+      choice for human users and is what the rest of this guide assumes. Enable it once:
+    </p>
+    <pre class="block">vault auth enable userpass</pre>
+    <p>Note the mount accessor — you'll need it for entity aliases and external groups.
+       Capture it now:</p>
+    <pre class="block">vault auth list -format=json | jq -r '."userpass/".accessor'
+<span class="c"># e.g. auth_userpass_1c802641</span></pre>
+    <div class="callout">
+      <p><b>Identities are created on first login.</b> When a user authenticates for the
+      first time, Vault auto-creates an <i>entity</i> for them and the policy's
+      <code>{{identity.entity.id}}</code> resolves to it. If you need a user's entity to
+      exist <i>before</i> they log in (for example, to add them to a group up front),
+      pre-create the entity and alias it to their userpass login — see
+      <a href="#entities">Entities &amp; aliases</a> below.</p>
+    </div>
+  </div>
+</section>
+
+<section id="assignment">
+  <div class="wrap">
+    <p class="kicker">Step 4</p>
+    <h2>Assigning the policy: groups &amp; auto-assignment</h2>
+    <p class="lede">
+      Because the policy is identity-templated, you only ever attach <i>one</i> policy —
+      <code>cowbird-user-access</code> — to your users. There are three ways to do it,
+      with an important caveat about hands-off auto-enrollment under userpass.
+    </p>
+
+    <h3>Option A — Per-user token policies (simplest)</h3>
+    <p>Attach the policy directly when you create or update each userpass user. This is
+       the most explicit approach and the one cowbird's own reference deployment uses.</p>
+    <pre class="block">vault write auth/userpass/users/paul \
+    password='…' \
+    token_policies="cowbird-user-access"</pre>
+    <ul class="plain">
+      <li><b>Pro:</b> nothing else to wire up; what you see on the user is what they get.</li>
+      <li><b>Con:</b> you must remember to set it on every user, and there's no single
+          switch to grant or revoke cowbird access fleet-wide.</li>
+    </ul>
+
+    <h3>Option B — An internal identity group (centralized)</h3>
+    <p>Attach the policy to an <i>internal</i> identity group and make each user's entity
+       a member. Now access is managed in one place: add an entity to grant access,
+       remove it to revoke.</p>
+    <pre class="block"><span class="c"># Create the group once, with the policy attached</span>
+vault write identity/group \
+    name="cowbird-users" \
+    type="internal" \
+    policies="cowbird-user-access"
+
+<span class="c"># Add members (this REPLACES the member list and the policy set,</span>
+<span class="c"># so always pass the full set you want to end up with)</span>
+vault write identity/group/name/cowbird-users \
+    policies="cowbird-user-access" \
+    member_entity_ids="&lt;eid1&gt;,&lt;eid2&gt;,&lt;eid3&gt;"</pre>
+    <p>To append one member without listing them all by hand, read the current set first:</p>
+    <pre class="block">CUR=$(vault read -format=json identity/group/name/cowbird-users \
+      | jq -r '.data.member_entity_ids | join(",")')
+vault write identity/group/name/cowbird-users \
+    policies="cowbird-user-access" \
+    member_entity_ids="${CUR},&lt;new-eid&gt;"</pre>
+    <ul class="plain">
+      <li><b>Pro:</b> one place to manage access; users themselves carry no policy.</li>
+      <li><b>Con:</b> membership is manual. userpass does not add users to groups for
+          you (see Option C), so you add each entity yourself — typically at the moment
+          you provision the user.</li>
+    </ul>
+
+    <h3>Option C — External groups / true auto-assignment</h3>
+    <p>Vault's hands-off model is the <i>external</i> identity group: you map a group
+       name reported by the auth backend (a "group alias") to an internal group, and
+       Vault populates membership automatically as users log in.</p>
+    <pre class="block"><span class="c"># How it would look with an auth method that reports groups</span>
+vault write identity/group name="cowbird-users-ext" \
+    type="external" policies="cowbird-user-access"
+
+vault write identity/group-alias name="&lt;backend-group-name&gt;" \
+    mount_accessor="&lt;accessor&gt;" \
+    canonical_id="&lt;external-group-id&gt;"</pre>
+    <div class="callout warn">
+      <p><b>This does not work with userpass.</b> userpass in Vault 2.0.0 emits no group
+      claims, so the group alias never matches at login and members are never added
+      automatically. There is no login-time hook to drive auto-enrollment for userpass.
+      If you need genuinely hands-off enrollment, use an auth method that reports group
+      membership — OIDC or LDAP — and external groups + aliases work as designed. With
+      userpass, use Option A or Option B.</p>
+    </div>
+
+    <h3>Pragmatic "auto-assignment" for userpass</h3>
+    <p>Since there's no login-time hook, the practical substitute is to do the
+       assignment at <i>provisioning</i> time: a small script that creates the user,
+       pre-creates and aliases their entity, and adds that entity to the group — so the
+       policy is in place before they ever log in.</p>
+    <pre class="block">NAME="paul"
+ACCESSOR=$(vault auth list -format=json | jq -r '."userpass/".accessor')
+
+<span class="c"># 1. create the userpass login (no policy here; the group carries it)</span>
+vault write auth/userpass/users/$NAME password='…'
+
+<span class="c"># 2. pre-create the entity and alias the login to it</span>
+EID=$(vault write -format=json identity/entity name="$NAME" | jq -r '.data.id')
+vault write identity/entity-alias name="$NAME" \
+    canonical_id="$EID" mount_accessor="$ACCESSOR"
+
+<span class="c"># 3. add the entity to the cowbird group</span>
+CUR=$(vault read -format=json identity/group/name/cowbird-users \
+      | jq -r '.data.member_entity_ids | join(",")')
+vault write identity/group/name/cowbird-users \
+    policies="cowbird-user-access" \
+    member_entity_ids="${CUR:+$CUR,}$EID"</pre>
+
+    <h3 id="entities">Entities &amp; aliases</h3>
+    <p>The alias in step 2 above is what binds the userpass login <code>paul</code> to
+       the entity you created, so that when Paul logs in Vault reuses that entity rather
+       than minting a fresh one. Get this right and the entity is a group member from the
+       start; get it wrong and the user logs in under a different, group-less entity and
+       sees no access. To inspect what a login resolves to:</p>
+    <pre class="block">vault read identity/entity/name/paul        <span class="c"># entity, its aliases, group membership</span>
+vault list identity/entity/name             <span class="c"># all entities by name</span></pre>
+  </div>
+</section>
+
+<section id="users">
+  <div class="wrap">
+    <p class="kicker">Step 5</p>
+    <h2>Managing userpass users</h2>
+    <p class="lede">
+      Day-to-day operations on the userpass auth method. Remember that with userpass the
+      <b>username is the display name</b> other cowbird users see in the share picker, so
+      choose names people will recognise.
+    </p>
+
+    <h3>Create a user</h3>
+    <pre class="block"><span class="c"># Option A style — policy on the user</span>
+vault write auth/userpass/users/paul \
+    password='…' \
+    token_policies="cowbird-user-access"
+
+<span class="c"># Option B style — no policy here; the identity group carries it</span>
+vault write auth/userpass/users/paul password='…'</pre>
+
+    <h3>List, read, and update</h3>
+    <pre class="block">vault list auth/userpass/users                 <span class="c"># all usernames</span>
+vault read auth/userpass/users/paul            <span class="c"># policies, token TTLs, etc.</span>
+
+<span class="c"># Change a user's password (admin reset)</span>
+vault write auth/userpass/users/paul/password password='new-…'
+
+<span class="c"># Change which policies a user's tokens get</span>
+vault write auth/userpass/users/paul token_policies="cowbird-user-access"</pre>
+
+    <div class="callout warn">
+      <p><b>An admin password reset does not recover cowbird data.</b> The Vault login
+      password and the cowbird <i>unlock password</i> are deliberately separate secrets
+      (along with the export passphrase). Resetting the Vault password lets the user log
+      in again, but it cannot decrypt their stored keypair. If a user forgets their
+      unlock password and never exported a recovery key, their data is unrecoverable —
+      by design, there is no operator-side reset. Encourage users to export a recovery
+      key (the app's <i>Export Recovery Key</i> action) and store it safely.</p>
+    </div>
+
+    <h3>Token lifetime</h3>
+    <p>Cowbird renews the user's Vault token in the background, but the auth method's
+       TTLs still set the ceiling. If sessions expire sooner than you'd like, tune them
+       on the user (or the mount):</p>
+    <pre class="block">vault write auth/userpass/users/paul \
+    token_ttl="1h" token_max_ttl="12h"</pre>
+
+    <h3>Disable or offboard a user</h3>
+    <p>Deleting the userpass login revokes the ability to log in:</p>
+    <pre class="block">vault delete auth/userpass/users/paul
+vault token revoke -mode=path auth/userpass/      <span class="c"># optional: kill live tokens</span></pre>
+    <p>Deleting the login does <i>not</i> delete the user's stored data. To fully reclaim
+       their footprint (the key names are opaque UUIDs, so list before deleting):</p>
+    <ul class="plain">
+      <li>Their subtree under <code>cowbird/metadata/users/&lt;entityID&gt;/…</code> — list each
+          prefix and delete the keys (KV v2 has no recursive delete).</li>
+      <li>Their public-key entry <code>cowbird/pubkeys/&lt;entityID&gt;</code>, so no one can
+          share to them any more.</li>
+      <li>Their outgoing shared envelopes under <code>cowbird/shared/&lt;entityID&gt;/…</code>,
+          which revokes anything they had shared with others.</li>
+      <li>Optionally the identity entity: <code>vault delete identity/entity/name/paul</code>.</li>
+    </ul>
+    <p>Items <i>others</i> shared with this user are wrapped to that user's key and held
+       in the owners' subtrees; only those owners can revoke them, which the cowbird
+       client does for them on removal.</p>
+  </div>
+</section>
+
+<section id="verify">
+  <div class="wrap">
+    <p class="kicker">Step 6</p>
+    <h2>Verifying a user can access cowbird</h2>
+    <p class="lede">
+      A quick CLI smoke test confirms a freshly provisioned user resolves the policy
+      correctly before they ever open the app.
+    </p>
+    <pre class="block"><span class="c"># Log in as the user and capture their token</span>
+TOKEN=$(vault login -method=userpass -token-only \
+        username=paul password='…')
+
+<span class="c"># Confirm the policy is attached (directly or via group)</span>
+VAULT_TOKEN="$TOKEN" vault token lookup -format=json \
+  | jq '.data.policies'
+
+<span class="c"># Reading the directory should succeed; a write under their own</span>
+<span class="c"># subtree should succeed; both confirm the templated rules resolved.</span>
+VAULT_TOKEN="$TOKEN" vault kv list cowbird/pubkeys 2>/dev/null || \
+  echo "(empty directory is fine on a brand-new mount)"</pre>
+    <p>If the policy list is empty or the directory read is denied, the most common cause
+       is the entity/alias mismatch from <a href="#entities">Entities &amp; aliases</a> —
+       the user logged in under a different entity than the one you put in the group.</p>
+  </div>
+</section>
+
+<section id="gotchas">
+  <div class="wrap">
+    <p class="kicker">Operational notes</p>
+    <h2>Things to keep in mind</h2>
+    <ul class="plain">
+      <li><b>ACL rules don't merge.</b> The most specific matching path wins outright;
+          an exact path shadowed by a glob must repeat the glob's capabilities. Re-read
+          the <a href="#policy">policy notes</a> before editing the policy.</li>
+      <li><b>Key names are public.</b> Vault <code>list</code> output isn't ACL-filtered.
+          Keep everything in this mount keyed by opaque UUIDs.</li>
+      <li><b>userpass reports no groups.</b> External-group auto-enrollment won't work;
+          assign per-user or via a manually-maintained internal group. Switch to
+          OIDC/LDAP if you need hands-off enrollment.</li>
+      <li><b>Three separate secrets.</b> The Vault credential (in the OS keyring), the
+          unlock password (in the user's head), and the export passphrase (in the user's
+          head) are independent. No operator can decrypt a user's data, and no operator
+          reset exists.</li>
+      <li><b>Keep the policy file in sync.</b> The live policy and
+          <a href="https://github.com/avitacco/cowbird/blob/main/cowbird-user-access.hcl"><code>cowbird-user-access.hcl</code></a>
+          in the repo should always match.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <img src="icon-512.png" alt="">
+    <p>
+      <a href="index.html">← Back to overview</a>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/avitacco/cowbird">github.com/avitacco/cowbird</a>
+      &nbsp;·&nbsp; Free software under the
+      <a href="https://github.com/avitacco/cowbird/blob/main/LICENSE">GPLv3</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
