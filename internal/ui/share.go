@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	ttwidget "github.com/dweymouth/fyne-tooltip/widget"
 )
 
 // displayName resolves an entity ID to its published display name, falling
@@ -64,7 +65,9 @@ func (m *mainWindow) refreshSharingSection(row itemRow, body *fyne.Container) {
 			for _, rec := range recs {
 				current[rec.RecipientID] = true
 				rec := rec
-				revokeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
+				revokeBtn := ttwidget.NewButtonWithIcon("", theme.CancelIcon(), nil)
+				revokeBtn.SetToolTip("Remove access")
+				revokeBtn.OnTapped = dismissTooltipThen(revokeBtn, func() {
 					m.confirmRevoke(row, rec, body)
 				})
 				body.Add(container.NewBorder(nil, nil, nil, revokeBtn,
@@ -79,13 +82,9 @@ func (m *mainWindow) refreshSharingSection(row itemRow, body *fyne.Container) {
 }
 
 // confirmRevoke asks for confirmation, then revokes one recipient's access
-// and refreshes the access list.
+// and refreshes the access list. Enter revokes, Escape dismisses.
 func (m *mainWindow) confirmRevoke(row itemRow, rec sharing.ShareRecord, body *fyne.Container) {
-	msg := fmt.Sprintf("Revoke access to %q for %s?", row.Title, m.displayName(rec.RecipientID))
-	dialog.ShowConfirm("Revoke access", msg, func(confirmed bool) {
-		if !confirmed {
-			return
-		}
+	revoke := func() {
 		m.status.SetText("Revoking…")
 		go func() {
 			err := m.app.Service.Revoke(context.Background(), rec.ShareID, rec.RecipientID)
@@ -98,23 +97,54 @@ func (m *mainWindow) confirmRevoke(row itemRow, rec sharing.ShareRecord, body *f
 				m.refreshSharingSection(row, body)
 			})
 		}()
+	}
+
+	var d dialog.Dialog
+	// The dialog content is just a message label (not focusable), so a hidden
+	// key-catcher carries Enter/Escape — Fyne routes keys only to the focused
+	// widget and its dialogs do not handle Escape themselves.
+	catcher := newKeyCatcher(
+		func() { d.Hide(); revoke() },
+		func() { d.Hide() },
+	)
+	msg := widget.NewLabel(fmt.Sprintf("Revoke access to %q for %s?", row.Title, m.displayName(rec.RecipientID)))
+	msg.Wrapping = fyne.TextWrapWord
+	content := container.NewStack(msg, catcher)
+
+	d = dialog.NewCustomConfirm("Revoke access", "Revoke", "Cancel", content, func(confirmed bool) {
+		if confirmed {
+			revoke()
+		}
 	}, m.win)
+	d.Show()
+	m.win.Canvas().Focus(catcher)
 }
 
 // showShareDialog offers the eligible recipients (directory minus self minus
-// current recipients) and shares the item with the chosen one.
+// current recipients) and shares the item with the chosen one. Enter shares,
+// Escape cancels.
 func (m *mainWindow) showShareDialog(row itemRow, current map[string]bool, body *fyne.Container) {
 	labels, byLabel := m.eligibleRecipients(current)
 	if len(labels) == 0 {
-		dialog.ShowInformation("Share", "There are no other users to share this item with.", m.win)
+		var d dialog.Dialog
+		dismiss := func() { d.Hide() }
+		catcher := newKeyCatcher(dismiss, dismiss)
+		content := container.NewStack(
+			widget.NewLabel("There are no other users to share this item with."),
+			catcher,
+		)
+		d = dialog.NewCustom("Share", "OK", content, m.win)
+		d.Show()
+		m.win.Canvas().Focus(catcher)
 		return
 	}
 
-	sel := widget.NewSelect(labels, nil)
+	sel := newEscapableSelect(labels, nil)
 	sel.SetSelected(labels[0])
 
-	dialog.ShowCustomConfirm("Share "+row.Title, "Share", "Cancel", sel, func(share bool) {
-		if !share || sel.Selected == "" {
+	var d dialog.Dialog
+	share := func() {
+		if sel.Selected == "" {
 			return
 		}
 		recipientID := byLabel[sel.Selected]
@@ -130,7 +160,86 @@ func (m *mainWindow) showShareDialog(row itemRow, current map[string]bool, body 
 				m.refreshSharingSection(row, body)
 			})
 		}()
+	}
+
+	d = dialog.NewCustomConfirm("Share "+row.Title, "Share", "Cancel", sel, func(doShare bool) {
+		if doShare {
+			share()
+		}
 	}, m.win)
+	sel.onEscape = d.Hide
+	sel.onSubmit = func() { d.Hide(); share() }
+	d.Show()
+	m.win.Canvas().Focus(sel)
+}
+
+// keyCatcher is an invisible, zero-size focusable widget that forwards Enter
+// and Escape to callbacks. It exists so dialogs whose content is not otherwise
+// focusable can still be driven from the keyboard (Fyne routes key events only
+// to the focused widget).
+type keyCatcher struct {
+	widget.BaseWidget
+	onEnter  func()
+	onEscape func()
+}
+
+func newKeyCatcher(onEnter, onEscape func()) *keyCatcher {
+	k := &keyCatcher{onEnter: onEnter, onEscape: onEscape}
+	k.ExtendBaseWidget(k)
+	return k
+}
+
+func (k *keyCatcher) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(container.NewWithoutLayout())
+}
+
+func (k *keyCatcher) FocusGained()   {}
+func (k *keyCatcher) FocusLost()     {}
+func (k *keyCatcher) TypedRune(rune) {}
+
+func (k *keyCatcher) TypedKey(key *fyne.KeyEvent) {
+	switch key.Name {
+	case fyne.KeyReturn, fyne.KeyEnter:
+		if k.onEnter != nil {
+			k.onEnter()
+		}
+	case fyne.KeyEscape:
+		if k.onEscape != nil {
+			k.onEscape()
+		}
+	}
+}
+
+// escapableSelect is a Select that forwards Enter to onSubmit and Escape to
+// onEscape. The base Select ignores Enter, so mapping it to submit does not
+// clash with the dropdown's own keys (Space/arrows still open and cycle it).
+type escapableSelect struct {
+	widget.Select
+	onSubmit func()
+	onEscape func()
+}
+
+func newEscapableSelect(options []string, changed func(string)) *escapableSelect {
+	s := &escapableSelect{}
+	s.Options = options
+	s.OnChanged = changed
+	s.ExtendBaseWidget(s)
+	return s
+}
+
+func (s *escapableSelect) TypedKey(key *fyne.KeyEvent) {
+	switch key.Name {
+	case fyne.KeyReturn, fyne.KeyEnter:
+		if s.onSubmit != nil {
+			s.onSubmit()
+		}
+	case fyne.KeyEscape:
+		if s.onEscape != nil {
+			s.onEscape()
+		}
+	default:
+		s.Select.TypedKey(key)
+	}
 }
 
 // eligibleRecipients returns sorted picker labels and a label → entityID map

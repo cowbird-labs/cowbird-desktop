@@ -12,6 +12,8 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	fynetooltip "github.com/dweymouth/fyne-tooltip"
+	ttwidget "github.com/dweymouth/fyne-tooltip/widget"
 )
 
 // mainWindow holds the state of the item list / editor window.
@@ -23,7 +25,7 @@ type mainWindow struct {
 	filtered []itemRow         // rows matching the current search/type filter
 	names    map[string]string // entityID → display name, from the directory
 
-	search     *widget.Entry
+	search     *escapableEntry
 	typeFilter *widget.Select
 	list       *widget.List
 	emptyBox   *fyne.Container // shown instead of the list when there are no items
@@ -45,10 +47,15 @@ func NewMainWindow(a fyne.App, app *core.App) fyne.Window {
 
 	m.detail = container.NewMax(detailPlaceholder())
 
-	toolbar := widget.NewToolbar(
-		widget.NewToolbarAction(theme.ContentAddIcon(), m.chooseNewItemType),
-		widget.NewToolbarAction(theme.ViewRefreshIcon(), m.reload),
-	)
+	newBtn := ttwidget.NewButtonWithIcon("", theme.ContentAddIcon(), nil)
+	newBtn.Importance = widget.LowImportance
+	newBtn.SetToolTip("Create New item")
+	newBtn.OnTapped = dismissTooltipThen(newBtn, m.chooseNewItemType)
+	refreshBtn := ttwidget.NewButtonWithIcon("", theme.ViewRefreshIcon(), m.reload)
+	refreshBtn.Importance = widget.LowImportance
+	refreshBtn.SetToolTip("Refresh")
+	toolbar := container.NewHBox(newBtn, refreshBtn)
+
 	m.menuBtn = widget.NewButtonWithIcon("", theme.MenuIcon(), m.showMainMenu)
 	m.menuBtn.Importance = widget.LowImportance
 	topBar := container.NewBorder(nil, nil, toolbar, m.menuBtn)
@@ -57,7 +64,8 @@ func NewMainWindow(a fyne.App, app *core.App) fyne.Window {
 	split.SetOffset(0.35)
 
 	statusBar := container.NewBorder(nil, nil, nil, m.retryBtn, m.status)
-	m.win.SetContent(container.NewBorder(topBar, statusBar, nil, nil, split))
+	content := container.NewBorder(topBar, statusBar, nil, nil, split)
+	m.win.SetContent(fynetooltip.AddWindowToolTipLayer(content, m.win.Canvas()))
 
 	m.reload()
 	return m.win
@@ -133,10 +141,10 @@ func (m *mainWindow) chooseNewItemType() {
 	for i, t := range typeOrder {
 		options[i] = typeSpecs[t].display
 	}
-	radio := widget.NewRadioGroup(options, nil)
+	radio := newEscapableRadioGroup(options, nil)
 	radio.SetSelected(options[0])
 
-	dialog.ShowCustomConfirm("New item", "Create", "Cancel", radio, func(create bool) {
+	d := dialog.NewCustomConfirm("New item", "Create", "Cancel", radio, func(create bool) {
 		if !create || radio.Selected == "" {
 			return
 		}
@@ -147,6 +155,51 @@ func (m *mainWindow) chooseNewItemType() {
 			}
 		}
 	}, m.win)
+	radio.onEscape = d.Hide
+
+	d.Show()
+	m.win.Canvas().Focus(radio)
+}
+
+// dismissTooltipThen cancels any pending or shown tooltip on b before invoking
+// fn. fn opens a dialog; because clicking a button leaves the pointer resting
+// on it (no MouseOut fires), the button's delayed tooltip would otherwise try
+// to render over the new dialog overlay — which has no tooltip layer — and the
+// tooltip library logs "no tool tip layer created for current overlay".
+func dismissTooltipThen(b *ttwidget.Button, fn func()) func() {
+	return func() {
+		b.MouseOut()
+		fn()
+	}
+}
+
+// escapableRadioGroup is a RadioGroup that invokes onEscape when Escape is
+// pressed while it has focus. Fyne routes key events only to the focused
+// widget and its dialogs do not dismiss on Escape themselves, so the focused
+// widget must forward it. The base RadioGroup is not focusable, so this type
+// also implements fyne.Focusable purely to receive the Escape key (selection
+// is still by tap); it draws no focus indicator.
+type escapableRadioGroup struct {
+	widget.RadioGroup
+	onEscape func()
+}
+
+func newEscapableRadioGroup(options []string, changed func(string)) *escapableRadioGroup {
+	r := &escapableRadioGroup{}
+	r.Options = options
+	r.OnChanged = changed
+	r.ExtendBaseWidget(r)
+	return r
+}
+
+func (r *escapableRadioGroup) FocusGained()   {}
+func (r *escapableRadioGroup) FocusLost()     {}
+func (r *escapableRadioGroup) TypedRune(rune) {}
+
+func (r *escapableRadioGroup) TypedKey(key *fyne.KeyEvent) {
+	if key.Name == fyne.KeyEscape && r.onEscape != nil {
+		r.onEscape()
+	}
 }
 
 // confirmDelete asks for confirmation, then deletes the item (revoking any

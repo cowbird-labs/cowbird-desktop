@@ -6,6 +6,7 @@ require (
 	fyne.io/fyne/v2 v2.7.4
 	github.com/99designs/keyring v1.2.2
 	github.com/creasty/defaults v1.8.0
+	github.com/dweymouth/fyne-tooltip v0.4.0
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/hashicorp/vault-client-go v0.4.3
 	github.com/spf13/viper v1.21.0

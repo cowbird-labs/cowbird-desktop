@@ -9,6 +9,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	ttwidget "github.com/dweymouth/fyne-tooltip/widget"
 )
 
 const maskedValue = "••••••••"
@@ -46,24 +47,35 @@ func (m *mainWindow) showDetail(row itemRow) {
 		body.Add(m.buildFieldRow(cf.Label, cf.Value, sensitive))
 	}
 
-	// Owned items can be shared, edited, and deleted; shared items are
-	// read-only (recipients cannot re-share).
-	if !row.Shared {
-		rowCopy := row
-		body.Add(m.buildSharingSection(rowCopy))
-		buttons := container.NewHBox(
-			widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
-				m.showEditor(rowCopy.Type, &rowCopy)
-			}),
-			widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
-				m.confirmDelete(rowCopy)
-			}),
-		)
-		body.Add(widget.NewSeparator())
-		body.Add(buttons)
+	// Shared items are read-only (recipients cannot re-share), so they have no
+	// action bar — just the scrolling content.
+	if row.Shared {
+		m.setDetail(container.NewVScroll(container.NewPadded(body)))
+		return
 	}
 
-	m.setDetail(container.NewVScroll(container.NewPadded(body)))
+	// Owned items can be shared, edited, and deleted. The sharing section is
+	// part of the scrolling content; the Edit/Delete actions are pinned to the
+	// bottom-right of the pane (separated from the content) so they don't read
+	// as part of the sharing section.
+	rowCopy := row
+	body.Add(m.buildSharingSection(rowCopy))
+
+	buttons := container.NewHBox(
+		widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
+			m.showEditor(rowCopy.Type, &rowCopy)
+		}),
+		widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
+			m.confirmDelete(rowCopy)
+		}),
+	)
+	actionBar := container.NewVBox(
+		widget.NewSeparator(),
+		container.NewBorder(nil, nil, nil, container.NewPadded(buttons)),
+	)
+
+	scroll := container.NewVScroll(container.NewPadded(body))
+	m.setDetail(container.NewBorder(nil, actionBar, nil, nil, scroll))
 }
 
 // buildFieldRow renders one labeled value with a copy button and, for
@@ -78,23 +90,28 @@ func (m *mainWindow) buildFieldRow(label, value string, sensitive bool) fyne.Can
 	if sensitive {
 		valueLabel.SetText(maskedValue)
 		revealed := false
-		var revealBtn *widget.Button
-		revealBtn = widget.NewButtonWithIcon("", theme.VisibilityIcon(), func() {
+		var revealBtn *ttwidget.Button
+		revealBtn = ttwidget.NewButtonWithIcon("", theme.VisibilityIcon(), func() {
 			revealed = !revealed
 			if revealed {
 				valueLabel.SetText(value)
 				revealBtn.SetIcon(theme.VisibilityOffIcon())
+				revealBtn.SetToolTip("Hide")
 			} else {
 				valueLabel.SetText(maskedValue)
 				revealBtn.SetIcon(theme.VisibilityIcon())
+				revealBtn.SetToolTip("Reveal")
 			}
 		})
+		revealBtn.SetToolTip("Reveal")
 		actions.Add(revealBtn)
 	}
-	actions.Add(widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+	copyBtn := ttwidget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		m.win.Clipboard().SetContent(value)
 		m.status.SetText(fmt.Sprintf("Copied %s", label))
-	}))
+	})
+	copyBtn.SetToolTip("Copy to clipboard")
+	actions.Add(copyBtn)
 
 	return container.NewBorder(name, nil, nil, actions, valueLabel)
 }
