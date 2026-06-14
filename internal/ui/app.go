@@ -30,6 +30,7 @@ type mainWindow struct {
 	detail     *fyne.Container // right pane, single slot
 	status     *widget.Label
 	retryBtn   *widget.Button
+	menuBtn    *widget.Button // hamburger; popup menu anchors to it
 }
 
 // NewMainWindow creates the main item list / editor window.
@@ -47,14 +48,16 @@ func NewMainWindow(a fyne.App, app *core.App) fyne.Window {
 	toolbar := widget.NewToolbar(
 		widget.NewToolbarAction(theme.ContentAddIcon(), m.chooseNewItemType),
 		widget.NewToolbarAction(theme.ViewRefreshIcon(), m.reload),
-		widget.NewToolbarSpacer(),
 	)
+	m.menuBtn = widget.NewButtonWithIcon("", theme.MenuIcon(), m.showMainMenu)
+	m.menuBtn.Importance = widget.LowImportance
+	topBar := container.NewBorder(nil, nil, toolbar, m.menuBtn)
 
 	split := container.NewHSplit(m.buildListPane(), m.detail)
 	split.SetOffset(0.35)
 
 	statusBar := container.NewBorder(nil, nil, nil, m.retryBtn, m.status)
-	m.win.SetContent(container.NewBorder(toolbar, statusBar, nil, nil, split))
+	m.win.SetContent(container.NewBorder(topBar, statusBar, nil, nil, split))
 
 	m.reload()
 	return m.win
