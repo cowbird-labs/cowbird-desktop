@@ -26,7 +26,7 @@ Cowbird is built for deployments with a **known, finite set of users** — a com
 - [x] **Item list / editor UI** — searchable master-detail window: create/edit/delete for all six types with custom fields, masked sensitive values with reveal/copy, shared items read-only
 - [x] **Share / revoke UI** — share an owned item with a user picked by display name, see who has access, revoke per recipient; display names ride the auth identity and are published with public keys
 - [x] **Password change flow** — `core.ChangePassword` re-wraps the locked identity under a new Argon2id key (no item re-encryption); reached from the main window's hamburger menu
-- [ ] **Key rotation flow** — same: primitives done, no service/UI
+- [x] **Key rotation flow** — full re-key for compromise recovery: new keypair, every owned item re-encrypted under a fresh item key, shares re-distributed to recipients' current keys, old key destroyed; staged + resumable (interrupted rotations finish on next unlock)
 - [ ] **Key export/import UI** — `crypto.ExportKey`/`ImportKey` are implemented; no UI
 - [x] **Vault policy** — reference policy checked in as [`cowbird-user-access.hcl`](cowbird-user-access.hcl), verified against the live deployment (including the pubkey-directory list and the ACL precedence fix for the own-pubkey rule)
 - [ ] **Policy assignment at scale** — userpass in Vault 2.0.0 emits no group claims, so the policy is set per user via `token_policies`; revisit before deployments grow

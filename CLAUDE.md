@@ -34,11 +34,12 @@ Key dependencies: `fyne.io/fyne/v2`, `github.com/99designs/keyring`, `hashicorp/
 
 `VerifyMount` lists the user's own KV metadata path and treats a 404 as success, because `MountsReadConfiguration` is not permitted by cowbird's Vault policy.
 
-`*Vault` implements `sharing.Store` (`vault/store.go`). All KV writes store `{"v": "<json-string>"}` wrappers. Hard delete uses `KvV2DeleteMetadataAndAllVersions`. `vault/identity.go` adds `GetLockedIdentity`/`PutLockedIdentity` at path `users/<entityID>/identity`.
+`*Vault` implements `sharing.Store` (`vault/store.go`). All KV writes store `{"v": "<json-string>"}` wrappers. Hard delete uses `KvV2DeleteMetadataAndAllVersions`. `vault/identity.go` adds `GetLockedIdentity`/`PutLockedIdentity` at path `users/<entityID>/identity`, plus `Get`/`Put`/`DeletePrevLockedIdentity` at `users/<entityID>/identity.prev` — the transitional slot holding the old key during key rotation (its presence is the rotation-in-progress flag; see `core.RotateKey`).
 
 KV v2 paths used:
 - `users/<entityID>/items/<itemID>` — owner's own items
 - `users/<entityID>/identity` — locked identity (encrypted keypair)
+- `users/<entityID>/identity.prev` — transitional old locked identity during key rotation (deleted on completion)
 - `users/<entityID>/links/<shareID>` — durable SharedLink records
 - `users/<entityID>/shares/<shareID>` — owner's ShareRecords (outgoing shares)
 - `pubkeys/<entityID>` — public encryption keys + display names (`pubkeyRecord{pub, name}`; pre-name records unmarshal with empty name)
@@ -91,6 +92,8 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 `ChangePassword` (in `core.go`) re-wraps the stored locked identity under a new Argon2id-derived key: load the locked identity, unlock with the old password (verifies it; generic error on mismatch), re-lock with the new password (fresh salt), and write back in a single replacement `PutLockedIdentity`. The keypair is unchanged, so no item contents are re-encrypted and the live session stays valid; a write failure leaves the old record intact and unlockable. UI is `ui/password.go`'s change-password dialog, reached from the main window's hamburger menu (`showMainMenu`, popup anchored to the menu button).
 
+`RotateKey` (in `core.go`) does full key rotation for compromise recovery: generate a new keypair, re-encrypt every owned item under a fresh item key wrapped to the new key, re-distribute outstanding shares to recipients' current public keys, publish the new public key, and destroy the old keypair. It is staged for crash-safety: the old key is written to `identity.prev` *before* the new key becomes canonical, and `identity.prev` is deleted only once every owned item is migrated (the point the old key is destroyed). Ordering invariant: the old key must remain recoverable until all owned items are migrated. `completeInterruptedRotation` (shared by `RotateKey` and `InitIdentity`'s unlock path) finishes an interrupted rotation — it recognises the aborted-before-commit case (canonical and prev share a fingerprint) and cleans up, otherwise runs `Service.Rekey` with the old key to read and the new key as target. `InitIdentity` calls it on every unlock, so an interrupted rotation completes before the main window opens. The bulk re-key itself is `sharing.Service.Rekey` (idempotent/resumable: an item already openable with the new key is not re-encrypted; shares are reconciled to the item's current key each pass). UI is `ui/password.go`'s rotate-key dialog (warning + password), reached from the same hamburger menu. The in-memory identity/service swap goes through `App.adoptIdentity`. Items shared *with* the user (wrapped to their old key by other owners) are not re-keyed by rotation — only those owners can; they degrade to unreadable rows until re-shared.
+
 ### ui
 
 `NewSetupWindow` handles the first-run flow: collects vault address, mount path, auth method, and credentials; validates; authenticates; verifies mount access; saves config; opens the main window.
@@ -118,7 +121,6 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 ## On the horizon
 
-- Key rotation flow (new keypair, re-wrap all item keys, republish public key)
 - Key export/import UI (`crypto.ExportKey`/`ImportKey` are implemented; UI is not)
 - Vault policy update: confirm `users/<eid>/identity`, `users/<eid>/links/*`, and `users/<eid>/shares/*` paths (one self-subtree rule covers all); confirm inbox hard-delete on metadata path
 - Vault policy assignment at scale

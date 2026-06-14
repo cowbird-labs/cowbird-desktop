@@ -157,6 +157,129 @@ func (s *Service) DeleteItem(ctx context.Context, itemID string) error {
 	return nil
 }
 
+// Rekey re-encrypts every owned item under a fresh item key wrapped to newPub,
+// then re-distributes each item's new key to its existing recipients. It drives
+// key rotation: oldPriv reads items still wrapped to the old key, newPriv
+// detects items already migrated (so a resumed rotation does not re-encrypt
+// them), and newPub is the rotation target.
+//
+// It is idempotent and resumable. An already-migrated item keeps its current
+// item key; either way the item's shares are reconciled to that key, so a
+// partial run completes cleanly when re-invoked. Key material is passed
+// explicitly rather than read from s.identity, because during rotation the
+// service's identity may be either the old or the new one.
+func (s *Service) Rekey(ctx context.Context, oldPriv, newPriv, newPub [32]byte) error {
+	envs, err := s.store.ListItems(ctx)
+	if err != nil {
+		return fmt.Errorf("listing items: %w", err)
+	}
+	for _, env := range envs {
+		migrated, itemKey, err := s.rekeyOwnedItem(ctx, env, oldPriv, newPriv, newPub)
+		if err != nil {
+			return err
+		}
+		if err := s.redistributeShares(ctx, migrated, itemKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rekeyOwnedItem migrates a single owned envelope to newPub and returns the
+// migrated envelope and its item key. An envelope already readable with newPriv
+// is left untouched (its key is reused); otherwise its content is decrypted
+// with oldPriv and re-encrypted under a fresh item key wrapped to newPub.
+func (s *Service) rekeyOwnedItem(ctx context.Context, env Envelope, oldPriv, newPriv, newPub [32]byte) (Envelope, []byte, error) {
+	ownerWK, ok := findOwnerKey(env, s.entityID)
+	if !ok {
+		return Envelope{}, nil, fmt.Errorf("no owner wrapped key in item %s", env.ID)
+	}
+
+	// Already migrated (resume): the owner's wrapped key opens with the new key.
+	if itemKey, err := crypto.UnwrapKey(newPriv, ownerWK.EphemeralPub, ownerWK.Nonce, ownerWK.Wrapped); err == nil {
+		return env, itemKey, nil
+	}
+
+	oldItemKey, err := crypto.UnwrapKey(oldPriv, ownerWK.EphemeralPub, ownerWK.Nonce, ownerWK.Wrapped)
+	if err != nil {
+		return Envelope{}, nil, fmt.Errorf("unwrapping item key for %s: %w", env.ID, err)
+	}
+	plaintext, err := crypto.Open(oldItemKey, env.Nonce, env.Ciphertext)
+	if err != nil {
+		return Envelope{}, nil, fmt.Errorf("decrypting item %s: %w", env.ID, err)
+	}
+
+	newItemKey, err := crypto.NewItemKey()
+	if err != nil {
+		return Envelope{}, nil, fmt.Errorf("generating item key for %s: %w", env.ID, err)
+	}
+	nonce, ciphertext, err := crypto.Seal(newItemKey, plaintext)
+	if err != nil {
+		return Envelope{}, nil, fmt.Errorf("sealing item %s: %w", env.ID, err)
+	}
+	ownerWK, err = WrapKeyForRecipient(newItemKey, s.entityID, newPub)
+	if err != nil {
+		return Envelope{}, nil, fmt.Errorf("wrapping key for owner: %w", err)
+	}
+
+	env.Recipients = []WrappedKey{ownerWK}
+	env.Nonce = nonce
+	env.Ciphertext = ciphertext
+	if err := s.store.PutItem(ctx, env.ID, env); err != nil {
+		return Envelope{}, nil, fmt.Errorf("storing rekeyed item %s: %w", env.ID, err)
+	}
+	return env, newItemKey, nil
+}
+
+// redistributeShares rewrites every shared envelope made from env under the new
+// item key and notifies each recipient, wrapping to the recipient's current
+// published public key. Recipients regain access on their next inbox process.
+func (s *Service) redistributeShares(ctx context.Context, env Envelope, itemKey []byte) error {
+	recs, err := s.ListShareRecords(ctx, env.ID)
+	if err != nil {
+		return err
+	}
+	for _, rec := range recs {
+		recipientPub, err := s.store.GetPublicKey(ctx, rec.RecipientID)
+		if err != nil {
+			return fmt.Errorf("getting public key for %s: %w", rec.RecipientID, err)
+		}
+		recipientWK, err := WrapKeyForRecipient(itemKey, rec.RecipientID, recipientPub)
+		if err != nil {
+			return fmt.Errorf("wrapping key for recipient %s: %w", rec.RecipientID, err)
+		}
+		recipientWKBytes, err := marshalWrappedKey(recipientWK)
+		if err != nil {
+			return err
+		}
+
+		sharedEnv := env
+		sharedEnv.ID = rec.ShareID
+		version, err := s.store.PutSharedEnvelope(ctx, rec.ShareID, sharedEnv)
+		if err != nil {
+			return fmt.Errorf("rewriting shared envelope %s: %w", rec.ShareID, err)
+		}
+
+		msg := Message{
+			Type:       MessageShare,
+			ShareID:    rec.ShareID,
+			SenderID:   s.entityID,
+			EnvVersion: version,
+			Timestamp:  time.Now().UTC(),
+			Share: &SharePayload{
+				SharePath:  sharePath(s.entityID, rec.ShareID),
+				WrappedKey: recipientWKBytes,
+				ItemType:   string(env.Type),
+				OwnerID:    s.entityID,
+			},
+		}
+		if err := s.store.SendMessage(ctx, rec.RecipientID, newID(), msg); err != nil {
+			return fmt.Errorf("sending rekey message to %s: %w", rec.RecipientID, err)
+		}
+	}
+	return nil
+}
+
 // Share shares itemID with recipientID.
 //
 // It decrypts the owner's item key, wraps it for the recipient, writes a shared
