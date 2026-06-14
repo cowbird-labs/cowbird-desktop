@@ -293,8 +293,9 @@ footer img { width: 40px; height: 40px; background: #fff; border-radius: 10px; p
       <div class="card">
         <h3><span class="glyph">🗝️</span>No operator recovery</h3>
         <p>The only recovery mechanism is a user-initiated, passphrase-protected key
-           export. There is deliberately no admin reset: no one exists who could
-           perform one without also being able to read your data.</p>
+           export, re-imported on a new device to regain access. There is deliberately
+           no admin reset: no one exists who could perform one without also being able
+           to read your data.</p>
       </div>
     </div>
   </div>
@@ -511,8 +512,9 @@ vault write auth/userpass/users/paul \
     <h2>What works today</h2>
     <p class="lede">
       The crypto layer, item storage, sharing service, and the full desktop UI flow —
-      setup, unlock, item editing, share and revoke — are implemented and tested
-      against a live Vault deployment.
+      setup, unlock, item editing, sharing, revocation, password change, key rotation,
+      and passphrase-protected key export/import for device-loss recovery — are
+      implemented and tested against a live Vault deployment.
     </p>
     <ul class="status-list">
       <li class="done">Crypto layer — KDF, AEAD, key wrapping, export/import</li>
@@ -522,9 +524,10 @@ vault write auth/userpass/users/paul \
       <li class="done">First-run setup &amp; unlock UI</li>
       <li class="done">Item list / editor UI with search and masking</li>
       <li class="done">Share / revoke UI with display names</li>
+      <li class="done">Password change &amp; key rotation flows</li>
+      <li class="done">Key export / import UI for device-loss recovery</li>
+      <li class="done">Keyboard shortcuts, button tooltips &amp; polished item list</li>
       <li class="done">Reference Vault policy, verified live</li>
-      <li class="todo">Password change &amp; key rotation flows</li>
-      <li class="todo">Key export / import UI</li>
       <li class="todo">CLI interface</li>
       <li class="todo">Mobile builds (Android / iOS)</li>
     </ul>

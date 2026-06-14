@@ -29,6 +29,7 @@ Cowbird is built for deployments with a **known, finite set of users** — a com
 - [x] **Key rotation flow** — full re-key for compromise recovery: new keypair, every owned item re-encrypted under a fresh item key, shares re-distributed to recipients' current keys, old key destroyed; staged + resumable (interrupted rotations finish on next unlock)
 - [x] **Key export UI** — `core.ExportIdentity` gates `crypto.ExportKey` behind the unlock password and writes a passphrase-protected `cowbird-recovery.json`; reached from the hamburger menu
 - [x] **Key import UI** — `core.ImportIdentity` restores a recovery file into Vault under a new unlock password (with a published-pubkey mismatch guard); reached from the unlock window in both first-run and returning-user states
+- [x] **UI polish** — full keyboard support across dialogs (Escape closes, Enter confirms or advances fields, first field auto-focused), Escape in the search box clears it and resets the type filter, hover tooltips on the icon buttons (toolbar, copy, reveal/hide, remove-share), bottom-anchored item Edit/Delete actions, and alternating row shading in the item list
 - [x] **Vault policy** — reference policy checked in as [`cowbird-user-access.hcl`](cowbird-user-access.hcl), verified against the live deployment (including the pubkey-directory list and the ACL precedence fix for the own-pubkey rule)
 - [ ] **Policy assignment at scale** — userpass in Vault 2.0.0 emits no group claims, so the policy is set per user via `token_policies`; revisit before deployments grow
 - [ ] **CLI interface**
