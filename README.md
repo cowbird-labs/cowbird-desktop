@@ -1,6 +1,6 @@
 # cowbird
 
-A desktop password manager written in Go that uses [HashiCorp Vault](https://www.vaultproject.io/) as its storage backend. Cowbird has no server component of its own — it is a client that lays its eggs in someone else's nest.
+A desktop password manager written in Go that uses [HashiCorp Vault](https://www.vaultproject.io/) as its storage backend. Cowbird has no server component of its own — just you and your Vault.
 
 - **GUI**: [Fyne](https://fyne.io/) (`fyne.io/fyne/v2`), app ID `co.avitac.cowbird`
 - **Targets**: macOS / Linux / Windows desktop now; Android / iOS eventually
