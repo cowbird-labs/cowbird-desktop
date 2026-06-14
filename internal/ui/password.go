@@ -18,6 +18,7 @@ func (m *mainWindow) showMainMenu() {
 	menu := fyne.NewMenu("",
 		fyne.NewMenuItem("Change Password…", m.showChangePasswordDialog),
 		fyne.NewMenuItem("Rotate Key…", m.showRotateKeyDialog),
+		fyne.NewMenuItem("Export Recovery Key…", m.showExportKeyDialog),
 	)
 	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(m.menuBtn)
 	pos.Y += m.menuBtn.Size().Height
@@ -162,4 +163,107 @@ func (m *mainWindow) showRotateKeyDialog() {
 	}
 
 	d.Show()
+}
+
+// showExportKeyDialog presents the recovery-key export flow: an authorization
+// (unlock password) plus a separate passphrase that protects the file. On
+// success it opens a file-save dialog and writes the passphrase-encrypted key.
+// Custom dialog so auth/validation errors keep the form open for retry.
+func (m *mainWindow) showExportKeyDialog() {
+	unlockEntry := widget.NewPasswordEntry()
+	unlockEntry.SetPlaceHolder("Current unlock password")
+	passEntry := widget.NewPasswordEntry()
+	passEntry.SetPlaceHolder("Export passphrase")
+	confirmEntry := widget.NewPasswordEntry()
+	confirmEntry.SetPlaceHolder("Confirm export passphrase")
+
+	strengthLabel := ""
+	strengthBar := widget.NewProgressBar()
+	strengthBar.TextFormatter = func() string { return strengthLabel }
+	passEntry.OnChanged = func(s string) {
+		var score float64
+		score, strengthLabel = passwordStrength(s)
+		strengthBar.SetValue(score)
+	}
+
+	errorLabel := widget.NewLabel("")
+	exportBtn := widget.NewButton("Export…", nil)
+
+	content := container.NewVBox(
+		widget.NewLabel(
+			"Save your private key to a passphrase-protected file. This is the\n"+
+				"ONLY way to recover access if you lose your device — there is no\n"+
+				"operator reset. Store the file somewhere safe and offline."),
+		widget.NewSeparator(),
+		unlockEntry,
+		passEntry,
+		strengthBar,
+		confirmEntry,
+		errorLabel,
+		exportBtn,
+	)
+
+	d := dialog.NewCustom("Export Recovery Key", "Cancel", content, m.win)
+
+	exportBtn.OnTapped = func() {
+		unlock := unlockEntry.Text
+		pass := passEntry.Text
+		switch {
+		case unlock == "":
+			errorLabel.SetText("Enter your current unlock password.")
+			return
+		case pass == "":
+			errorLabel.SetText("Enter an export passphrase.")
+			return
+		case pass != confirmEntry.Text:
+			errorLabel.SetText("Export passphrases do not match.")
+			return
+		}
+
+		errorLabel.SetText("")
+		exportBtn.Disable()
+
+		go func() {
+			data, err := core.ExportIdentity(context.Background(), m.app, []byte(unlock), []byte(pass))
+			fyne.Do(func() {
+				if err != nil {
+					errorLabel.SetText(fmt.Sprintf("Error: %v", err))
+					exportBtn.Enable()
+					return
+				}
+				d.Hide()
+				m.saveRecoveryFile(data)
+			})
+		}()
+	}
+
+	d.Show()
+}
+
+// saveRecoveryFile prompts for a location and writes the recovery bytes there.
+// Success is reported only once the file is written and closed without error.
+func (m *mainWindow) saveRecoveryFile(data []byte) {
+	save := dialog.NewFileSave(func(w fyne.URIWriteCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, m.win)
+			return
+		}
+		if w == nil {
+			return // user cancelled
+		}
+		_, werr := w.Write(data)
+		cerr := w.Close()
+		if werr != nil {
+			dialog.ShowError(fmt.Errorf("writing recovery file: %w", werr), m.win)
+			return
+		}
+		if cerr != nil {
+			dialog.ShowError(fmt.Errorf("closing recovery file: %w", cerr), m.win)
+			return
+		}
+		dialog.ShowInformation("Recovery key exported",
+			"Your recovery key was saved. Keep it somewhere safe and offline.", m.win)
+	}, m.win)
+	save.SetFileName("cowbird-recovery.json")
+	save.Show()
 }
