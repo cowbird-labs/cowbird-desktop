@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 )
 
@@ -12,9 +13,12 @@ var ErrNotFound = errors.New("not found")
 // advisory display name published with the key; it may be empty (records
 // published before names existed) and is not authenticated — under the soft
 // trust model the operator could alter it, as they could the key itself.
+// SigPub is the entity's Ed25519 share-signing key; it may be empty for
+// identities published before signing keys existed (008).
 type PublicKeyEntry struct {
 	EntityID string
 	Pub      [32]byte
+	SigPub   ed25519.PublicKey
 	Name     string
 }
 
@@ -33,7 +37,8 @@ type Store interface {
 
 	// Public-key directory (pubkeys/<entityID>; read-all, write-own)
 	GetPublicKey(ctx context.Context, entityID string) ([32]byte, error)
-	PutPublicKey(ctx context.Context, entityID string, pub [32]byte, name string) error
+	GetSigningKey(ctx context.Context, entityID string) (ed25519.PublicKey, error)
+	PutPublicKey(ctx context.Context, entityID string, pub [32]byte, sigPub ed25519.PublicKey, name string) error
 	ListPublicKeys(ctx context.Context) ([]PublicKeyEntry, error)
 
 	// Shared envelopes (shared/<ownerEntityID>/<shareID>; written by owner, readable by all)

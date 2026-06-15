@@ -31,6 +31,20 @@ func InitIdentity(ctx context.Context, v *vault.Vault, password []byte) (*crypto
 	if err != nil {
 		return nil, err
 	}
+	// Migrate identities created before share-signing keys existed (008): mint
+	// one and persist it under the same password, so this user can sign shares
+	// and publish a signing key. Done before re-publishing below.
+	if added, err := id.EnsureSigningKey(); err != nil {
+		return nil, fmt.Errorf("ensuring signing key: %w", err)
+	} else if added {
+		relocked, err := crypto.LockIdentity(id, password)
+		if err != nil {
+			return nil, fmt.Errorf("re-locking with signing key: %w", err)
+		}
+		if err := v.PutLockedIdentity(ctx, relocked); err != nil {
+			return nil, fmt.Errorf("storing identity with signing key: %w", err)
+		}
+	}
 	// Finish a key rotation interrupted before completion, before the identity
 	// is handed back and the app becomes usable. After this, every owned item is
 	// wrapped to the canonical key.
@@ -38,8 +52,9 @@ func InitIdentity(ctx context.Context, v *vault.Vault, password []byte) (*crypto
 		return nil, fmt.Errorf("completing key rotation: %w", err)
 	}
 	// Re-publish the public key so the directory entry carries the current
-	// display name (entries published before names existed self-heal here).
-	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, v.DisplayName); err != nil {
+	// display name (entries published before names existed self-heal here) and
+	// the signing key (entries published before 008 self-heal here).
+	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, id.SigningPub, v.DisplayName); err != nil {
 		return nil, fmt.Errorf("refreshing public key: %w", err)
 	}
 	return id, nil
@@ -160,7 +175,7 @@ func completeInterruptedRotation(ctx context.Context, v *vault.Vault, canonical 
 
 	// Publish the new public key so future shares target it, then re-key every
 	// owned item and re-distribute shares using the old key to read.
-	if err := v.PutPublicKey(ctx, v.EntityID, canonical.EncryptionPub, v.DisplayName); err != nil {
+	if err := v.PutPublicKey(ctx, v.EntityID, canonical.EncryptionPub, canonical.SigningPub, v.DisplayName); err != nil {
 		return fmt.Errorf("publishing rotated public key: %w", err)
 	}
 	svc := sharing.NewService(v.EntityID, canonical, v)
@@ -192,6 +207,12 @@ func ImportIdentity(ctx context.Context, v *vault.Vault, data, exportPassphrase,
 	if err != nil {
 		return nil, err
 	}
+	// A recovery file made before signing keys existed restores an identity with
+	// none; mint one now so the imported session can sign shares immediately and
+	// publishes a signing key below.
+	if _, err := id.EnsureSigningKey(); err != nil {
+		return nil, fmt.Errorf("ensuring signing key: %w", err)
+	}
 
 	// Safety check: refuse to overwrite a different identity unless forced.
 	switch existingPub, err := v.GetPublicKey(ctx, v.EntityID); {
@@ -215,7 +236,7 @@ func ImportIdentity(ctx context.Context, v *vault.Vault, data, exportPassphrase,
 	if err := v.DeletePrevLockedIdentity(ctx); err != nil && !errors.Is(err, sharing.ErrNotFound) {
 		return nil, fmt.Errorf("clearing rotation marker: %w", err)
 	}
-	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, v.DisplayName); err != nil {
+	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, id.SigningPub, v.DisplayName); err != nil {
 		return nil, fmt.Errorf("publishing public key: %w", err)
 	}
 	return id, nil
@@ -256,7 +277,7 @@ func createIdentity(ctx context.Context, v *vault.Vault, password []byte) (*cryp
 	if err := v.PutLockedIdentity(ctx, locked); err != nil {
 		return nil, fmt.Errorf("storing identity: %w", err)
 	}
-	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, v.DisplayName); err != nil {
+	if err := v.PutPublicKey(ctx, v.EntityID, id.EncryptionPub, id.SigningPub, v.DisplayName); err != nil {
 		return nil, fmt.Errorf("publishing public key: %w", err)
 	}
 	return id, nil

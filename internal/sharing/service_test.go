@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"sync"
 	"testing"
 
@@ -97,10 +98,20 @@ func (m *memStore) GetPublicKey(_ context.Context, entityID string) ([32]byte, e
 	return entry.Pub, nil
 }
 
-func (m *memStore) PutPublicKey(_ context.Context, entityID string, pub [32]byte, name string) error {
+func (m *memStore) GetSigningKey(_ context.Context, entityID string) (ed25519.PublicKey, error) {
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
-	m.state.pubkeys[entityID] = PublicKeyEntry{EntityID: entityID, Pub: pub, Name: name}
+	entry, ok := m.state.pubkeys[entityID]
+	if !ok || len(entry.SigPub) == 0 {
+		return nil, ErrNotFound
+	}
+	return entry.SigPub, nil
+}
+
+func (m *memStore) PutPublicKey(_ context.Context, entityID string, pub [32]byte, sigPub ed25519.PublicKey, name string) error {
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	m.state.pubkeys[entityID] = PublicKeyEntry{EntityID: entityID, Pub: pub, SigPub: sigPub, Name: name}
 	return nil
 }
 
@@ -269,9 +280,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	aliceID := "alice-entity-id"
 	bobID := "bob-entity-id"
 
-	// Register both public keys in the shared directory.
-	state.pubkeys[aliceID] = PublicKeyEntry{EntityID: aliceID, Pub: alice.EncryptionPub, Name: "Alice"}
-	state.pubkeys[bobID] = PublicKeyEntry{EntityID: bobID, Pub: bob.EncryptionPub, Name: "Bob"}
+	// Register both public keys (encryption + signing) in the shared directory.
+	state.pubkeys[aliceID] = PublicKeyEntry{EntityID: aliceID, Pub: alice.EncryptionPub, SigPub: alice.SigningPub, Name: "Alice"}
+	state.pubkeys[bobID] = PublicKeyEntry{EntityID: bobID, Pub: bob.EncryptionPub, SigPub: bob.SigningPub, Name: "Bob"}
 
 	aliceStr := newMemStore(aliceID, state)
 	bobStr := newMemStore(bobID, state)
@@ -395,6 +406,330 @@ func TestRevokeRemovesAccess(t *testing.T) {
 	}
 }
 
+func TestProcessShareRejectsForgedOwner(t *testing.T) {
+	te := newTestEnv(t)
+
+	// A forged share message lands in Bob's inbox claiming Alice as the owner,
+	// but its share path points into a different (the forger's) namespace. Only
+	// the path prefix is ACL-authenticated, so the claim must be rejected.
+	forged := Message{
+		Type:       MessageShare,
+		ShareID:    newID(),
+		SenderID:   te.aliceID, // unauthenticated claim
+		EnvVersion: 1,
+		Share: &SharePayload{
+			SharePath:  sharePath("mallory-entity-id", newID()),
+			WrappedKey: []byte("ignored"),
+			ItemType:   string(items.TypeLogin),
+			OwnerID:    te.aliceID, // lie: the path says mallory owns it
+		},
+	}
+	forgedID := newID()
+	te.state.mu.Lock()
+	te.state.inbox[te.bobID] = map[string]Message{forgedID: forged}
+	te.state.mu.Unlock()
+
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatalf("processing a forged message must not error: %v", err)
+	}
+
+	links, _ := te.bobStr.ListSharedLinks(te.ctx)
+	if len(links) != 0 {
+		t.Fatalf("forged share must not create a link, got %d", len(links))
+	}
+	// The hostile message is consumed so it cannot block startup or replay.
+	te.state.mu.Lock()
+	remaining := len(te.state.inbox[te.bobID])
+	te.state.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("forged message should be discarded, %d left in inbox", remaining)
+	}
+
+	// A genuine share still works, and the stored link's owner is taken from the
+	// authenticated path, not the payload.
+	env, err := te.aliceSvc.CreateItem(te.ctx, items.Login{Title: "Real", Username: "a", Password: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := te.aliceSvc.Share(te.ctx, env.ID, te.bobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	links, _ = te.bobStr.ListSharedLinks(te.ctx)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link from genuine share, got %d", len(links))
+	}
+	if links[0].OwnerID != te.aliceID {
+		t.Fatalf("link owner must come from the share path, got %q", links[0].OwnerID)
+	}
+}
+
+func TestEnvelopeMetadataIsAuthenticated(t *testing.T) {
+	te := newTestEnv(t)
+	env, err := te.aliceSvc.CreateItem(te.ctx, items.Login{Title: "Bind", Username: "a", Password: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.Format != contentFormatAAD {
+		t.Fatalf("new envelope should be AAD-bound, got format %d", env.Format)
+	}
+
+	// Tampering the bound type (an operator relabel) must fail authentication
+	// rather than silently mis-decode.
+	tampered := env
+	tampered.Type = items.TypeCard
+	if _, err := te.aliceSvc.OpenOwnItem(te.ctx, tampered); err == nil {
+		t.Fatal("expected open to fail when bound Type is altered")
+	}
+
+	// Tampering the bound owner likewise fails.
+	tampered = env
+	tampered.OwnerID = "someone-else"
+	if _, err := te.aliceSvc.OpenOwnItem(te.ctx, tampered); err == nil {
+		t.Fatal("expected open to fail when bound OwnerID is altered")
+	}
+}
+
+func TestLegacyEnvelopeStillOpens(t *testing.T) {
+	te := newTestEnv(t)
+	content := items.Note{Title: "Old", Body: "sealed before AAD"}
+
+	// Hand-build a pre-008 envelope: content sealed with no associated data and
+	// Format left at 0. It must remain readable (lazy migration, not a hard cut).
+	itemKey, err := crypto.NewItemKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentBytes, err := items.Encode(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, ciphertext, err := crypto.Seal(itemKey, contentBytes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerWK, err := WrapKeyForRecipient(itemKey, te.aliceID, te.alice.EncryptionPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := Envelope{
+		ID:         newID(),
+		Type:       content.Kind(),
+		OwnerID:    te.aliceID,
+		Format:     0, // legacy
+		Recipients: []WrappedKey{ownerWK},
+		Nonce:      nonce,
+		Ciphertext: ciphertext,
+	}
+	if err := te.aliceStr.PutItem(te.ctx, legacy.ID, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := te.aliceSvc.OpenOwnItem(te.ctx, legacy)
+	if err != nil {
+		t.Fatalf("legacy envelope should still open: %v", err)
+	}
+	if got.(items.Note).Body != content.Body {
+		t.Fatalf("legacy content mismatch: %+v", got)
+	}
+
+	// Editing it upgrades it to the bound format.
+	updated, err := te.aliceSvc.UpdateItem(te.ctx, legacy.ID, items.Note{Title: "Old", Body: "now bound"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Format != contentFormatAAD {
+		t.Fatalf("edit should upgrade legacy envelope to AAD format, got %d", updated.Format)
+	}
+}
+
+func TestRevokeRekeysSoRetainedKeyIsDead(t *testing.T) {
+	te := newTestEnv(t)
+
+	// A third user, Carol, who keeps access throughout.
+	carol, err := crypto.NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	carolID := "carol-entity-id"
+	te.state.pubkeys[carolID] = PublicKeyEntry{EntityID: carolID, Pub: carol.EncryptionPub, SigPub: carol.SigningPub, Name: "Carol"}
+	carolStr := newMemStore(carolID, te.state)
+	carolSvc := NewService(carolID, carol, carolStr)
+
+	// Alice shares one item with both Bob and Carol.
+	env, err := te.aliceSvc.CreateItem(te.ctx, items.Note{Title: "S", Body: "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := te.aliceSvc.Share(te.ctx, env.ID, te.bobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := te.aliceSvc.Share(te.ctx, env.ID, carolID); err != nil {
+		t.Fatal(err)
+	}
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := carolSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bob harvests the item key he legitimately held while he had access.
+	bobLinks, _ := te.bobStr.ListSharedLinks(te.ctx)
+	bobWK, err := unmarshalWrappedKey(bobLinks[0].WrappedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobItemKey, err := crypto.UnwrapKey(te.bob.EncryptionPriv, bobWK.EphemeralPub, bobWK.Nonce, bobWK.Wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobShareID := bobLinks[0].ShareID
+
+	// Alice revokes Bob, then edits the item.
+	if err := te.aliceSvc.Revoke(te.ctx, bobShareID, te.bobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := te.aliceSvc.UpdateItem(te.ctx, env.ID, items.Note{Title: "S", Body: "v2-secret"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Carol keeps access without re-sharing (she processes the re-key message).
+	if err := carolSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	carolLinks, _ := carolStr.ListSharedLinks(te.ctx)
+	got, err := carolSvc.OpenSharedItem(te.ctx, carolLinks[0])
+	if err != nil {
+		t.Fatalf("carol lost access after revoke+edit: %v", err)
+	}
+	if got.(items.Note).Body != "v2-secret" {
+		t.Fatalf("carol did not see the edit: %+v", got)
+	}
+
+	// The attack: Bob's retained item key must NOT open Carol's now-re-keyed copy
+	// in the world-readable shared namespace.
+	ownerID, shareID, err := parseSharePath(carolLinks[0].SharePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carolEnv, _, err := carolStr.GetSharedEnvelope(te.ctx, ownerID, shareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := crypto.Open(bobItemKey, carolEnv.Nonce, carolEnv.Ciphertext, envelopeAAD(carolEnv)); err == nil {
+		t.Fatal("revoked recipient's retained item key must not decrypt re-keyed content")
+	}
+
+	// And Bob's link is gone once he processes the revoke.
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if links, _ := te.bobStr.ListSharedLinks(te.ctx); len(links) != 0 {
+		t.Fatalf("expected bob to have 0 links after revoke, got %d", len(links))
+	}
+}
+
+func TestProcessShareRejectsBadSignature(t *testing.T) {
+	te := newTestEnv(t)
+
+	// A message that passes the path-authority check (owner == path owner ==
+	// Alice) but carries an invalid signature — e.g. an operator who can write
+	// under Alice's namespace but cannot forge her signing key. Alice has a
+	// published signing key, so the signature is mandatory and this is rejected.
+	sid := newID()
+	forged := Message{
+		Type: MessageShare, ShareID: sid, SenderID: te.aliceID, EnvVersion: 1,
+		Share: &SharePayload{
+			SharePath:  sharePath(te.aliceID, sid),
+			OwnerID:    te.aliceID,
+			ItemType:   string(items.TypeNote),
+			WrappedKey: []byte("x"),
+		},
+		Signature: []byte("not a valid signature"),
+	}
+	te.state.mu.Lock()
+	te.state.inbox[te.bobID] = map[string]Message{newID(): forged}
+	te.state.mu.Unlock()
+
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatalf("must not error: %v", err)
+	}
+	if links, _ := te.bobStr.ListSharedLinks(te.ctx); len(links) != 0 {
+		t.Fatalf("bad-signature share must not create a link, got %d", len(links))
+	}
+}
+
+func TestProcessRevokeRejectsForgedRevoke(t *testing.T) {
+	te := newTestEnv(t)
+	env, err := te.aliceSvc.CreateItem(te.ctx, items.Note{Title: "Keep", Body: "mine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := te.aliceSvc.Share(te.ctx, env.ID, te.bobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	links, _ := te.bobStr.ListSharedLinks(te.ctx)
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(links))
+	}
+	shareID := links[0].ShareID
+
+	// Mallory forges a revoke for Bob's link, signing it with her own key rather
+	// than Alice's (the link owner). It must not delete Bob's legitimate link.
+	mallory, err := crypto.NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := Message{Type: MessageRevoke, ShareID: shareID, SenderID: te.aliceID}
+	forged.Signature = ed25519.Sign(mallory.SigningPriv, signingBytes(forged))
+	te.state.mu.Lock()
+	te.state.inbox[te.bobID][newID()] = forged
+	te.state.mu.Unlock()
+
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if links, _ := te.bobStr.ListSharedLinks(te.ctx); len(links) != 1 {
+		t.Fatalf("forged revoke must not delete the link, got %d links", len(links))
+	}
+}
+
+func TestProcessInboxDiscardsBadMessages(t *testing.T) {
+	te := newTestEnv(t)
+	te.state.mu.Lock()
+	te.state.inbox[te.bobID] = map[string]Message{
+		newID(): {Type: "bogus-type", ShareID: newID()}, // unknown type
+		newID(): {Type: MessageShare, ShareID: newID()}, // share with nil payload
+		newID(): {Type: MessageShare, ShareID: newID(), Share: &SharePayload{ // oversized
+			SharePath:  sharePath(te.aliceID, "x"),
+			OwnerID:    te.aliceID,
+			WrappedKey: make([]byte, maxWrappedKeyLen+1),
+		}},
+	}
+	te.state.mu.Unlock()
+
+	// None of these may abort processing (a single hostile message must not be
+	// able to block the victim's startup).
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatalf("bad messages must not abort the inbox: %v", err)
+	}
+	if links, _ := te.bobStr.ListSharedLinks(te.ctx); len(links) != 0 {
+		t.Fatalf("expected no links, got %d", len(links))
+	}
+	te.state.mu.Lock()
+	n := len(te.state.inbox[te.bobID])
+	te.state.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("expected inbox drained of bad messages, %d left", n)
+	}
+}
+
 func TestProcessInboxIdempotent(t *testing.T) {
 	te := newTestEnv(t)
 	env, err := te.aliceSvc.CreateItem(te.ctx, items.Password{Title: "WiFi", Password: "abc"})
@@ -430,6 +765,7 @@ func TestProcessInboxIdempotent(t *testing.T) {
 			OwnerID:    te.aliceID,
 		},
 	}
+	te.aliceSvc.signMessage(&replayMsg) // a real replay is a validly signed duplicate
 	replayID := newID()
 	te.state.mu.Lock()
 	if te.state.inbox[te.bobID] == nil {
