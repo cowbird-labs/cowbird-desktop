@@ -3,6 +3,7 @@ package crypto
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
 	"testing"
 )
 
@@ -60,6 +61,58 @@ func TestLockUnlockPreservesSigningKey(t *testing.T) {
 	}
 	if !unlocked.SigningPub.Equal(id.SigningPub) {
 		t.Fatal("signing public key mismatch after unlock")
+	}
+}
+
+func TestLegacyKDFRecordUnlocksAndUpgrades(t *testing.T) {
+	id, err := NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := []byte("pw")
+
+	// Hand-build a pre-009 record: derived with the kdfV1 parameters and Version
+	// left at 0 (as written before KDF versioning).
+	salt, err := GenerateSalt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p1, err := kdfParamsForVersion(kdfV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encKey := deriveUnlockKey(password, salt, p1)
+	plaintext, err := json.Marshal(lockedKeys{EncryptionPriv: id.EncryptionPriv[:], SigningPriv: id.SigningPriv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, ciphertext, err := Seal(encKey, plaintext, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := &LockedIdentity{Version: 0, Salt: salt, Nonce: nonce, Ciphertext: ciphertext}
+
+	if !NeedsKDFUpgrade(legacy) {
+		t.Fatal("a version-0 record should be flagged for KDF upgrade")
+	}
+	got, err := UnlockIdentity(legacy, password)
+	if err != nil {
+		t.Fatalf("legacy record must still unlock: %v", err)
+	}
+	if got.EncryptionPriv != id.EncryptionPriv {
+		t.Fatal("legacy record did not round-trip the key")
+	}
+
+	// A freshly locked record is at the current version and needs no upgrade.
+	cur, err := LockIdentity(id, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Version != currentKDFVersion {
+		t.Fatalf("new lock should be version %d, got %d", currentKDFVersion, cur.Version)
+	}
+	if NeedsKDFUpgrade(cur) {
+		t.Fatal("a current-version record must not need upgrade")
 	}
 }
 

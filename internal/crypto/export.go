@@ -9,8 +9,12 @@ const exportVersion = 1
 
 // ExportedKey is the passphrase-protected recovery file format.
 // Users should store this in a safe location outside of the device.
+// Version is the export-file format version; KDFVersion is the Argon2id
+// parameter-set version used to derive the encryption key (0/absent = kdfV1, for
+// recovery files written before KDF versioning).
 type ExportedKey struct {
 	Version    int    `json:"version"`
+	KDFVersion int    `json:"kdf_version,omitempty"`
 	Salt       []byte `json:"salt"`
 	Nonce      []byte `json:"nonce"`
 	Ciphertext []byte `json:"ciphertext"`
@@ -26,6 +30,7 @@ func ExportKey(id *Identity, passphrase []byte) ([]byte, error) {
 	}
 	exported := ExportedKey{
 		Version:    exportVersion,
+		KDFVersion: locked.Version,
 		Salt:       locked.Salt,
 		Nonce:      locked.Nonce,
 		Ciphertext: locked.Ciphertext,
@@ -47,6 +52,7 @@ func ImportKey(data, passphrase []byte) (*Identity, error) {
 		return nil, fmt.Errorf("unsupported export version %d", exported.Version)
 	}
 	locked := &LockedIdentity{
+		Version:    exported.KDFVersion,
 		Salt:       exported.Salt,
 		Nonce:      exported.Nonce,
 		Ciphertext: exported.Ciphertext,

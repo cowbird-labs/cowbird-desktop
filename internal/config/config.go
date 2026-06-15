@@ -11,15 +11,7 @@ import (
 )
 
 type Config struct {
-	Argon Argon `mapstructure:"argon"`
 	Vault Vault `mapstructure:"vault"`
-}
-
-type Argon struct {
-	Time    int `mapstructure:"time" default:"3"`
-	Memory  int `mapstructure:"memory" default:"65536"`
-	Threads int `mapstructure:"threads" default:"4"`
-	KeyLen  int `mapstructure:"key_len" default:"32"`
 }
 
 type Vault struct {

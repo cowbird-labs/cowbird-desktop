@@ -31,18 +31,22 @@ func InitIdentity(ctx context.Context, v *vault.Vault, password []byte) (*crypto
 	if err != nil {
 		return nil, err
 	}
-	// Migrate identities created before share-signing keys existed (008): mint
-	// one and persist it under the same password, so this user can sign shares
-	// and publish a signing key. Done before re-publishing below.
-	if added, err := id.EnsureSigningKey(); err != nil {
+	// One-time, password-in-hand migrations done on unlock, both satisfied by a
+	// single re-lock under the current KDF parameters:
+	//   - 008: mint a share-signing key for identities created before they existed.
+	//   - 009: upgrade the stored record to the current Argon2id parameters.
+	// LockIdentity always writes the current KDF version, so re-locking covers both.
+	addedSigningKey, err := id.EnsureSigningKey()
+	if err != nil {
 		return nil, fmt.Errorf("ensuring signing key: %w", err)
-	} else if added {
+	}
+	if addedSigningKey || crypto.NeedsKDFUpgrade(locked) {
 		relocked, err := crypto.LockIdentity(id, password)
 		if err != nil {
-			return nil, fmt.Errorf("re-locking with signing key: %w", err)
+			return nil, fmt.Errorf("re-locking identity: %w", err)
 		}
 		if err := v.PutLockedIdentity(ctx, relocked); err != nil {
-			return nil, fmt.Errorf("storing identity with signing key: %w", err)
+			return nil, fmt.Errorf("storing upgraded identity: %w", err)
 		}
 	}
 	// Finish a key rotation interrupted before completion, before the identity

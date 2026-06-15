@@ -41,8 +41,11 @@ func NewIdentity() (*Identity, error) {
 }
 
 // LockedIdentity is an Identity's private keys encrypted under an Argon2id-derived key.
-// This is the at-rest form stored in Vault.
+// This is the at-rest form stored in Vault. Version records the KDF parameter
+// set used to derive the key; 0 (absent) denotes a record written before KDF
+// versioning and is read as kdfV1.
 type LockedIdentity struct {
+	Version    int    `json:"version,omitempty"`
 	Salt       []byte `json:"salt"`
 	Nonce      []byte `json:"nonce"`
 	Ciphertext []byte `json:"ciphertext"`
@@ -73,13 +76,28 @@ func LockIdentity(id *Identity, password []byte) (*LockedIdentity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sealing key material: %w", err)
 	}
-	return &LockedIdentity{Salt: salt, Nonce: nonce, Ciphertext: ciphertext}, nil
+	return &LockedIdentity{Version: currentKDFVersion, Salt: salt, Nonce: nonce, Ciphertext: ciphertext}, nil
+}
+
+// NeedsKDFUpgrade reports whether locked was derived with an older KDF version
+// than the current default, so the caller can re-lock it (password in hand)
+// under stronger parameters. A version-0 record reads as kdfV1.
+func NeedsKDFUpgrade(locked *LockedIdentity) bool {
+	v := locked.Version
+	if v == 0 {
+		v = kdfV1
+	}
+	return v < currentKDFVersion
 }
 
 // UnlockIdentity decrypts a LockedIdentity with password and reconstructs the Identity.
 // Returns a generic error on wrong password to avoid leaking information.
 func UnlockIdentity(locked *LockedIdentity, password []byte) (*Identity, error) {
-	encKey := DeriveUnlockKey(password, locked.Salt)
+	p, err := kdfParamsForVersion(locked.Version)
+	if err != nil {
+		return nil, err
+	}
+	encKey := deriveUnlockKey(password, locked.Salt, p)
 	plaintext, err := Open(encKey, locked.Nonce, locked.Ciphertext, nil)
 	if err != nil {
 		return nil, errors.New("incorrect password or corrupted key material")
