@@ -41,22 +41,26 @@ func main() {
 		}
 	}
 
+	// openUnlock opens the unlock window for a live Vault. Must run on the Fyne
+	// main thread.
+	openUnlock := func(v *vault.Vault) {
+		unlockW := ui.NewUnlockWindow(a, v, func(coreApp *core.App) {
+			mainW := ui.NewMainWindow(a, coreApp)
+			mainW.Show()
+		})
+		unlockW.Show()
+	}
+
 	if needsSetup {
 		// This callback runs on the setup window's connect goroutine: the
 		// Vault connection stays here, but window work must go back to the
 		// Fyne main thread.
-		w := ui.NewSetupWindow(a, func(cfg config.Config, method auth.Method, store credentials.CredentialStore) error {
+		w := ui.NewSetupWindow(a, cfg, nil, func(cfg config.Config, method auth.Method, store credentials.CredentialStore) error {
 			v, err := vault.NewVault(cfg.Vault, store, method)
 			if err != nil {
 				return err
 			}
-			fyne.Do(func() {
-				unlockW := ui.NewUnlockWindow(a, v, func(coreApp *core.App) {
-					mainW := ui.NewMainWindow(a, coreApp)
-					mainW.Show()
-				})
-				unlockW.Show()
-			})
+			fyne.Do(func() { openUnlock(v) })
 			return nil
 		})
 		w.ShowAndRun()
@@ -69,15 +73,10 @@ func main() {
 	}
 
 	method := auth.ByName(cfg.Vault.AuthMethod)
-	v, err := vault.NewVault(cfg.Vault, store, method)
-	if err != nil {
-		log.Fatalf("error connecting to vault: %v", err)
-	}
-	defer v.Close()
 
-	w := ui.NewUnlockWindow(a, v, func(coreApp *core.App) {
-		mainW := ui.NewMainWindow(a, coreApp)
-		mainW.Show()
-	})
+	// NewConnectingWindow attempts the connection itself; if the server is
+	// unreachable it shows a dialog offering to edit the connection details
+	// rather than crashing.
+	w := ui.NewConnectingWindow(a, cfg, store, method, openUnlock)
 	w.ShowAndRun()
 }

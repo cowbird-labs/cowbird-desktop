@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"time"
 
 	"cowbird/internal/auth"
@@ -77,6 +79,26 @@ func VerifyMount(client *vaultclient.Client, mount string, entityID string) erro
 		return nil
 	}
 	return fmt.Errorf("mount %q not accessible: %w", mount, err)
+}
+
+// IsUnreachable reports whether err indicates the Vault server could not be
+// reached at all (network/DNS/TLS failure, connection refused, timeout), as
+// opposed to the server responding with an error (e.g. bad credentials). A
+// *vaultclient.ResponseError means the server answered, so it is reachable.
+func IsUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var respErr *vaultclient.ResponseError
+	if errors.As(err, &respErr) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var urlErr *url.Error
+	return errors.As(err, &urlErr)
 }
 
 // Close stops the background renewal loop.
