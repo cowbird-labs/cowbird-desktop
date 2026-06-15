@@ -19,15 +19,25 @@ import (
 // selected auth method, and populated credential store.
 type SetupDoneFunc func(cfg config.Config, method auth.Method, store credentials.CredentialStore) error
 
-// NewSetupWindow creates the first-run setup window.
-func NewSetupWindow(a fyne.App, onComplete SetupDoneFunc) fyne.Window {
+// NewSetupWindow creates the setup window. It is used both for first-run
+// configuration and for editing existing connection details; initial pre-fills
+// the address, mount path, and auth method (pass a zero config.Config for a
+// fresh setup). If creds is non-nil, the credential fields are pre-filled from
+// it (so editing the connection does not require re-entering them); pass nil on
+// first run to avoid touching the keyring before there is anything to read.
+func NewSetupWindow(a fyne.App, initial config.Config, creds credentials.CredentialStore, onComplete SetupDoneFunc) fyne.Window {
 	w := a.NewWindow("Cowbird Setup")
 
 	addressEntry := widget.NewEntry()
 	addressEntry.SetPlaceHolder("https://vault.example.com:8200")
+	addressEntry.SetText(initial.Vault.Address)
 
 	mountEntry := widget.NewEntry()
-	mountEntry.SetText("cowbird")
+	if initial.Vault.MountPath != "" {
+		mountEntry.SetText(initial.Vault.MountPath)
+	} else {
+		mountEntry.SetText("cowbird")
+	}
 
 	methods := auth.All()
 	methodNames := make([]string, len(methods))
@@ -61,6 +71,14 @@ func NewSetupWindow(a fyne.App, onComplete SetupDoneFunc) fyne.Window {
 			} else {
 				entry = widget.NewEntry()
 			}
+			// When editing an existing connection, pre-fill from the stored
+			// credentials so the user need not retype them. Missing keys (e.g.
+			// fields for a method that was never used) simply stay blank.
+			if creds != nil {
+				if val, err := creds.Get(f.Key); err == nil && val != "" {
+					entry.SetText(val)
+				}
+			}
 			fieldEntries[f.Key] = entry
 			credContainer.Add(widget.NewLabel(f.Label))
 			credContainer.Add(entry)
@@ -68,8 +86,17 @@ func NewSetupWindow(a fyne.App, onComplete SetupDoneFunc) fyne.Window {
 		credContainer.Refresh()
 	}
 
+	// Default to the configured auth method when editing, else the first.
+	var defaultMethod auth.Method
 	if len(methods) > 0 {
-		updateCredFields(methods[0])
+		defaultMethod = methods[0]
+		for _, m := range methods {
+			if m.Name() == initial.Vault.AuthMethod {
+				defaultMethod = m
+				break
+			}
+		}
+		updateCredFields(defaultMethod)
 	}
 
 	methodSelect := widget.NewSelect(methodNames, func(name string) {
@@ -80,8 +107,8 @@ func NewSetupWindow(a fyne.App, onComplete SetupDoneFunc) fyne.Window {
 			}
 		}
 	})
-	if len(methodNames) > 0 {
-		methodSelect.SetSelected(methodNames[0])
+	if defaultMethod != nil {
+		methodSelect.SetSelected(defaultMethod.Name())
 	}
 
 	setStatus := func(msg string) {
