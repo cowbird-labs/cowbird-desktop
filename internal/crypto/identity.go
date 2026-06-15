@@ -22,13 +22,18 @@ type Identity struct {
 	Fingerprint    string             // hex-encoded SHA-256 of EncryptionPub
 }
 
-// NewIdentity generates a fresh X25519 keypair.
+// NewIdentity generates a fresh X25519 encryption keypair (for wrapping item
+// keys) and an Ed25519 signing keypair (for authenticating shares).
 func NewIdentity() (*Identity, error) {
 	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating X25519 key: %w", err)
 	}
-	id := &Identity{}
+	sigPub, sigPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating Ed25519 key: %w", err)
+	}
+	id := &Identity{SigningPub: sigPub, SigningPriv: sigPriv}
 	copy(id.EncryptionPriv[:], priv.Bytes())
 	copy(id.EncryptionPub[:], priv.PublicKey().Bytes())
 	id.Fingerprint = keyFingerprint(id.EncryptionPub[:])
@@ -64,7 +69,7 @@ func LockIdentity(id *Identity, password []byte) (*LockedIdentity, error) {
 		return nil, fmt.Errorf("marshaling key material: %w", err)
 	}
 	encKey := DeriveUnlockKey(password, salt)
-	nonce, ciphertext, err := Seal(encKey, plaintext)
+	nonce, ciphertext, err := Seal(encKey, plaintext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("sealing key material: %w", err)
 	}
@@ -75,7 +80,7 @@ func LockIdentity(id *Identity, password []byte) (*LockedIdentity, error) {
 // Returns a generic error on wrong password to avoid leaking information.
 func UnlockIdentity(locked *LockedIdentity, password []byte) (*Identity, error) {
 	encKey := DeriveUnlockKey(password, locked.Salt)
-	plaintext, err := Open(encKey, locked.Nonce, locked.Ciphertext)
+	plaintext, err := Open(encKey, locked.Nonce, locked.Ciphertext, nil)
 	if err != nil {
 		return nil, errors.New("incorrect password or corrupted key material")
 	}
@@ -97,6 +102,23 @@ func UnlockIdentity(locked *LockedIdentity, password []byte) (*Identity, error) 
 	copy(id.EncryptionPub[:], priv.PublicKey().Bytes())
 	id.Fingerprint = keyFingerprint(id.EncryptionPub[:])
 	return id, nil
+}
+
+// EnsureSigningKey attaches a freshly generated Ed25519 signing keypair if the
+// identity has none — the migration path for identities created before signing
+// keys existed. It reports whether a key was added, so the caller knows to
+// persist and re-publish.
+func (id *Identity) EnsureSigningKey() (bool, error) {
+	if len(id.SigningPriv) == ed25519.PrivateKeySize {
+		return false, nil
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return false, fmt.Errorf("generating Ed25519 key: %w", err)
+	}
+	id.SigningPub = pub
+	id.SigningPriv = priv
+	return true, nil
 }
 
 func keyFingerprint(pub []byte) string {

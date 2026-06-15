@@ -33,7 +33,7 @@ func WrapKey(recipientPub [32]byte, itemKey []byte) (ephemeralPub, nonce, wrappe
 	ephPub := ephPriv.PublicKey().Bytes()
 	wrapKey := deriveWrapKey(shared, ephPub, recipientPub[:])
 
-	nonce, wrapped, err = Seal(wrapKey, itemKey)
+	nonce, wrapped, err = Seal(wrapKey, itemKey, nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("sealing item key: %w", err)
 	}
@@ -61,7 +61,7 @@ func UnwrapKey(recipientPriv [32]byte, ephemeralPub, nonce, wrapped []byte) ([]b
 	}
 
 	wrapKey := deriveWrapKey(shared, ephemeralPub, priv.PublicKey().Bytes())
-	return Open(wrapKey, nonce, wrapped)
+	return Open(wrapKey, nonce, wrapped, nil)
 }
 
 // deriveWrapKey derives a 32-byte key from the ECDH shared secret via HKDF.

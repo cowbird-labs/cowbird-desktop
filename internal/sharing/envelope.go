@@ -9,6 +9,33 @@ import (
 	"cowbird/internal/items"
 )
 
+// contentFormatAAD marks an envelope whose content ciphertext authenticates the
+// associated data from contentAAD. Format 0 (absent) is the legacy form sealed
+// with nil AAD.
+const contentFormatAAD = 1
+
+// contentAAD is the associated data binding item content to its envelope. It
+// covers only fields that are identical across the owner's copy and every shared
+// copy — OwnerID and Type — so the single shared ciphertext still opens under
+// each copy. ID is deliberately excluded: shared copies reuse the owner's
+// ciphertext under a different ID (the shareID), so binding ID would break them.
+func contentAAD(ownerID string, typ items.ItemType) []byte {
+	aad := make([]byte, 0, len(ownerID)+1+len(typ))
+	aad = append(aad, ownerID...)
+	aad = append(aad, 0) // separator; neither field contains a NUL
+	aad = append(aad, typ...)
+	return aad
+}
+
+// envelopeAAD returns the associated data to authenticate when opening env,
+// honoring its Format so legacy (nil-AAD) envelopes still decrypt.
+func envelopeAAD(env Envelope) []byte {
+	if env.Format < contentFormatAAD {
+		return nil
+	}
+	return contentAAD(env.OwnerID, env.Type)
+}
+
 // NewEnvelope creates an encrypted Envelope for content owned by ownerID.
 // The owner's wrapped item key is placed in Recipients[0].
 // The plaintext item key is also returned so the caller can wrap it for
@@ -24,7 +51,7 @@ func NewEnvelope(ownerID string, ownerPub [32]byte, content items.Content) (Enve
 		return Envelope{}, nil, fmt.Errorf("encoding content: %w", err)
 	}
 
-	nonce, ciphertext, err := crypto.Seal(itemKey, contentBytes)
+	nonce, ciphertext, err := crypto.Seal(itemKey, contentBytes, contentAAD(ownerID, content.Kind()))
 	if err != nil {
 		return Envelope{}, nil, fmt.Errorf("sealing content: %w", err)
 	}
@@ -38,6 +65,7 @@ func NewEnvelope(ownerID string, ownerPub [32]byte, content items.Content) (Enve
 		ID:         newID(),
 		Type:       content.Kind(),
 		OwnerID:    ownerID,
+		Format:     contentFormatAAD,
 		Recipients: []WrappedKey{ownerWK},
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
@@ -51,7 +79,7 @@ func OpenEnvelope(env Envelope, recipientPriv [32]byte, wk WrappedKey) (items.Co
 	if err != nil {
 		return nil, fmt.Errorf("unwrapping item key: %w", err)
 	}
-	contentBytes, err := crypto.Open(itemKey, env.Nonce, env.Ciphertext)
+	contentBytes, err := crypto.Open(itemKey, env.Nonce, env.Ciphertext, envelopeAAD(env))
 	if err != nil {
 		return nil, fmt.Errorf("decrypting content: %w", err)
 	}

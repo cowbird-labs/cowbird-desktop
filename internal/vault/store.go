@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 
@@ -153,8 +154,20 @@ func (v *Vault) GetPublicKey(ctx context.Context, entityID string) ([32]byte, er
 	return pub, nil
 }
 
-func (v *Vault) PutPublicKey(ctx context.Context, entityID string, pub [32]byte, name string) error {
-	_, err := v.kvWrite(ctx, "pubkeys/"+entityID, pubkeyRecord{Pub: pub[:], Name: name})
+func (v *Vault) GetSigningKey(ctx context.Context, entityID string) (ed25519.PublicKey, error) {
+	var rec pubkeyRecord
+	if _, err := v.kvRead(ctx, "pubkeys/"+entityID, &rec); err != nil {
+		return nil, err
+	}
+	if len(rec.SigPub) == 0 {
+		// Identity published before signing keys existed (008 migration window).
+		return nil, sharing.ErrNotFound
+	}
+	return ed25519.PublicKey(rec.SigPub), nil
+}
+
+func (v *Vault) PutPublicKey(ctx context.Context, entityID string, pub [32]byte, sigPub ed25519.PublicKey, name string) error {
+	_, err := v.kvWrite(ctx, "pubkeys/"+entityID, pubkeyRecord{Pub: pub[:], SigPub: sigPub, Name: name})
 	return err
 }
 
@@ -171,17 +184,21 @@ func (v *Vault) ListPublicKeys(ctx context.Context) ([]sharing.PublicKeyEntry, e
 		}
 		entry := sharing.PublicKeyEntry{EntityID: entityID, Name: rec.Name}
 		copy(entry.Pub[:], rec.Pub)
+		if len(rec.SigPub) > 0 {
+			entry.SigPub = ed25519.PublicKey(rec.SigPub)
+		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
 }
 
-// pubkeyRecord is the at-rest form of a user's X25519 public key.
-// Name was added in 003; records published before it unmarshal with an
-// empty name.
+// pubkeyRecord is the at-rest form of a user's published keys.
+// Name was added in 003; SigPub (the Ed25519 share-signing key) in 008.
+// Records published before each field unmarshal with that field empty.
 type pubkeyRecord struct {
-	Pub  []byte `json:"pub"` // 32-byte X25519 public key, JSON-encoded as base64
-	Name string `json:"name,omitempty"`
+	Pub    []byte `json:"pub"`               // 32-byte X25519 public key, JSON-encoded as base64
+	SigPub []byte `json:"sig_pub,omitempty"` // 32-byte Ed25519 signing key
+	Name   string `json:"name,omitempty"`
 }
 
 // --- shared envelopes (shared/<ownerEntityID>/<shareID>) ---------------------

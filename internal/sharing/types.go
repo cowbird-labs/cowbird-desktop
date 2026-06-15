@@ -27,16 +27,22 @@ type WrappedKey struct {
 // Recipients holds the owner's wrapped copy of the item key. For shared items,
 // the recipient's wrapped key is NOT stored here — it travels via the inbox.
 type Envelope struct {
-	ID         string         `json:"id"`
-	Type       items.ItemType `json:"type"`
-	OwnerID    string         `json:"owner_id"`
-	Recipients []WrappedKey   `json:"recipients,omitempty"`
-	Nonce      []byte         `json:"nonce"`
-	Ciphertext []byte         `json:"ciphertext"`
-	Signature  []byte         `json:"signature,omitempty"` // deferred
+	ID      string         `json:"id"`
+	Type    items.ItemType `json:"type"`
+	OwnerID string         `json:"owner_id"`
+	// Format is the content-AEAD format: 0 (absent) for legacy envelopes sealed
+	// with no associated data, contentFormatAAD for content bound to the owner
+	// and type. See contentAAD.
+	Format     int          `json:"format,omitempty"`
+	Recipients []WrappedKey `json:"recipients,omitempty"`
+	Nonce      []byte       `json:"nonce"`
+	Ciphertext []byte       `json:"ciphertext"`
+	Signature  []byte       `json:"signature,omitempty"` // deferred
 }
 
 // Message is a consume-and-delete inbox message written by the sender.
+// Signature is the sender's Ed25519 signature over the authenticated fields
+// (see signingBytes); it is empty for legacy senders who predate signing keys.
 type Message struct {
 	Type       MessageType   `json:"type"`
 	ShareID    string        `json:"share_id"`    // opaque UUID identifying the share
@@ -44,6 +50,7 @@ type Message struct {
 	EnvVersion int64         `json:"env_version"` // KV v2 version; ordering tiebreaker
 	Timestamp  time.Time     `json:"timestamp"`   // display only, not authoritative
 	Share      *SharePayload `json:"share,omitempty"`
+	Signature  []byte        `json:"signature,omitempty"`
 }
 
 // SharePayload carries the data a recipient needs to access a newly shared item.

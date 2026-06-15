@@ -108,12 +108,13 @@ func (s *Service) UpdateItem(ctx context.Context, itemID string, content items.C
 	if err != nil {
 		return Envelope{}, fmt.Errorf("encoding content: %w", err)
 	}
-	nonce, ciphertext, err := crypto.Seal(itemKey, contentBytes)
+	env.Type = content.Kind()
+	nonce, ciphertext, err := crypto.Seal(itemKey, contentBytes, contentAAD(env.OwnerID, env.Type))
 	if err != nil {
 		return Envelope{}, fmt.Errorf("sealing content: %w", err)
 	}
 
-	env.Type = content.Kind()
+	env.Format = contentFormatAAD
 	env.Nonce = nonce
 	env.Ciphertext = ciphertext
 
@@ -147,7 +148,7 @@ func (s *Service) DeleteItem(ctx context.Context, itemID string) error {
 		return err
 	}
 	for _, rec := range recs {
-		if err := s.revokeShare(ctx, rec.ShareID, rec.RecipientID); err != nil {
+		if err := s.dropShare(ctx, rec.ShareID, rec.RecipientID); err != nil {
 			return err
 		}
 	}
@@ -178,7 +179,7 @@ func (s *Service) Rekey(ctx context.Context, oldPriv, newPriv, newPub [32]byte) 
 		if err != nil {
 			return err
 		}
-		if err := s.redistributeShares(ctx, migrated, itemKey); err != nil {
+		if err := s.redistributeShares(ctx, migrated, itemKey, ""); err != nil {
 			return err
 		}
 	}
@@ -200,11 +201,27 @@ func (s *Service) rekeyOwnedItem(ctx context.Context, env Envelope, oldPriv, new
 		return env, itemKey, nil
 	}
 
-	oldItemKey, err := crypto.UnwrapKey(oldPriv, ownerWK.EphemeralPub, ownerWK.Nonce, ownerWK.Wrapped)
+	return s.resealUnderNewItemKey(ctx, env, oldPriv, newPub)
+}
+
+// resealUnderNewItemKey decrypts env's content (reading the owner's wrapped key
+// with readPriv), re-encrypts it under a brand-new item key wrapped to ownerPub,
+// writes the envelope back, and returns the updated envelope and the new item
+// key. Unlike rekeyOwnedItem it has no resume short-circuit: it always mints a
+// fresh item key, which is what makes it usable both for identity rotation
+// (readPriv = old key, ownerPub = new key) and for revocation re-keying under
+// the same identity (readPriv/ownerPub = the current key), where the point is
+// precisely to invalidate the previous item key.
+func (s *Service) resealUnderNewItemKey(ctx context.Context, env Envelope, readPriv, ownerPub [32]byte) (Envelope, []byte, error) {
+	ownerWK, ok := findOwnerKey(env, s.entityID)
+	if !ok {
+		return Envelope{}, nil, fmt.Errorf("no owner wrapped key in item %s", env.ID)
+	}
+	oldItemKey, err := crypto.UnwrapKey(readPriv, ownerWK.EphemeralPub, ownerWK.Nonce, ownerWK.Wrapped)
 	if err != nil {
 		return Envelope{}, nil, fmt.Errorf("unwrapping item key for %s: %w", env.ID, err)
 	}
-	plaintext, err := crypto.Open(oldItemKey, env.Nonce, env.Ciphertext)
+	plaintext, err := crypto.Open(oldItemKey, env.Nonce, env.Ciphertext, envelopeAAD(env))
 	if err != nil {
 		return Envelope{}, nil, fmt.Errorf("decrypting item %s: %w", env.ID, err)
 	}
@@ -213,16 +230,17 @@ func (s *Service) rekeyOwnedItem(ctx context.Context, env Envelope, oldPriv, new
 	if err != nil {
 		return Envelope{}, nil, fmt.Errorf("generating item key for %s: %w", env.ID, err)
 	}
-	nonce, ciphertext, err := crypto.Seal(newItemKey, plaintext)
+	nonce, ciphertext, err := crypto.Seal(newItemKey, plaintext, contentAAD(env.OwnerID, env.Type))
 	if err != nil {
 		return Envelope{}, nil, fmt.Errorf("sealing item %s: %w", env.ID, err)
 	}
-	ownerWK, err = WrapKeyForRecipient(newItemKey, s.entityID, newPub)
+	newOwnerWK, err := WrapKeyForRecipient(newItemKey, s.entityID, ownerPub)
 	if err != nil {
 		return Envelope{}, nil, fmt.Errorf("wrapping key for owner: %w", err)
 	}
 
-	env.Recipients = []WrappedKey{ownerWK}
+	env.Format = contentFormatAAD
+	env.Recipients = []WrappedKey{newOwnerWK}
 	env.Nonce = nonce
 	env.Ciphertext = ciphertext
 	if err := s.store.PutItem(ctx, env.ID, env); err != nil {
@@ -234,12 +252,17 @@ func (s *Service) rekeyOwnedItem(ctx context.Context, env Envelope, oldPriv, new
 // redistributeShares rewrites every shared envelope made from env under the new
 // item key and notifies each recipient, wrapping to the recipient's current
 // published public key. Recipients regain access on their next inbox process.
-func (s *Service) redistributeShares(ctx context.Context, env Envelope, itemKey []byte) error {
+// The share whose ID equals excludeShareID (pass "" for none) is skipped — used
+// by revocation so the recipient being removed is not re-issued the new key.
+func (s *Service) redistributeShares(ctx context.Context, env Envelope, itemKey []byte, excludeShareID string) error {
 	recs, err := s.ListShareRecords(ctx, env.ID)
 	if err != nil {
 		return err
 	}
 	for _, rec := range recs {
+		if rec.ShareID == excludeShareID {
+			continue
+		}
 		recipientPub, err := s.store.GetPublicKey(ctx, rec.RecipientID)
 		if err != nil {
 			return fmt.Errorf("getting public key for %s: %w", rec.RecipientID, err)
@@ -273,6 +296,7 @@ func (s *Service) redistributeShares(ctx context.Context, env Envelope, itemKey 
 				OwnerID:    s.entityID,
 			},
 		}
+		s.signMessage(&msg)
 		if err := s.store.SendMessage(ctx, rec.RecipientID, newID(), msg); err != nil {
 			return fmt.Errorf("sending rekey message to %s: %w", rec.RecipientID, err)
 		}
@@ -349,6 +373,7 @@ func (s *Service) Share(ctx context.Context, itemID, recipientID string) error {
 			OwnerID:    s.entityID,
 		},
 	}
+	s.signMessage(&msg)
 	if err := s.store.SendMessage(ctx, recipientID, newID(), msg); err != nil {
 		return fmt.Errorf("sending share message to %s: %w", recipientID, err)
 	}
@@ -357,16 +382,74 @@ func (s *Service) Share(ctx context.Context, itemID, recipientID string) error {
 
 // Revoke removes a recipient's access to a shared item.
 //
-// It deletes the shared envelope (the real security action — the ciphertext is
-// gone), drops a revoke message so the recipient's client can remove the stale
-// SharedLink, and removes the owner's ShareRecord. recipientID is required to
-// route the revoke message. Revoking an already-revoked share is not an error,
-// so a partially failed revoke can be retried.
+// Deleting the recipient's shared envelope copy is necessary but not sufficient:
+// the recipient may have retained the item key, and that key still opens any
+// other recipient's copy in the world-readable shared namespace. So Revoke
+// re-keys the item — re-encrypting its content under a fresh item key and
+// redistributing that key to the *remaining* recipients (the one being revoked
+// is excluded) — before dropping the revoked copy, record, and notifying the
+// recipient. The re-key runs first and is keyed off the still-present share
+// record, so a partial failure is retryable: the record survives until the
+// re-key and copy removal have both been attempted.
+//
+// recipientID is required to route the revoke message. Revoking an
+// already-revoked share is not an error.
 func (s *Service) Revoke(ctx context.Context, shareID, recipientID string) error {
-	return s.revokeShare(ctx, shareID, recipientID)
+	itemID, err := s.itemIDForShare(ctx, shareID)
+	if err != nil {
+		return err
+	}
+	// itemID == "" means the share record is already gone (idempotent retry or
+	// unknown share); there is nothing left to re-key, so just ensure the copy,
+	// record, and notification are cleaned up.
+	if itemID != "" {
+		if err := s.rekeyItemExcluding(ctx, itemID, shareID); err != nil {
+			return fmt.Errorf("re-keying item %s on revoke: %w", itemID, err)
+		}
+	}
+	return s.dropShare(ctx, shareID, recipientID)
 }
 
-func (s *Service) revokeShare(ctx context.Context, shareID, recipientID string) error {
+// itemIDForShare returns the owned item ID a share belongs to, or "" if no such
+// share record exists.
+func (s *Service) itemIDForShare(ctx context.Context, shareID string) (string, error) {
+	recs, err := s.store.ListShareRecords(ctx)
+	if err != nil {
+		return "", fmt.Errorf("listing share records: %w", err)
+	}
+	for _, rec := range recs {
+		if rec.ShareID == shareID {
+			return rec.ItemID, nil
+		}
+	}
+	return "", nil
+}
+
+// rekeyItemExcluding re-encrypts the owned item under a fresh item key and
+// redistributes it to every current recipient except excludeShareID. It is the
+// cryptographic core of revocation. A missing item (already deleted) is a no-op.
+func (s *Service) rekeyItemExcluding(ctx context.Context, itemID, excludeShareID string) error {
+	env, err := s.store.GetItem(ctx, itemID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("getting item %s: %w", itemID, err)
+	}
+	migrated, itemKey, err := s.resealUnderNewItemKey(ctx, env, s.identity.EncryptionPriv, s.identity.EncryptionPub)
+	if err != nil {
+		return err
+	}
+	return s.redistributeShares(ctx, migrated, itemKey, excludeShareID)
+}
+
+// dropShare removes a single share: it deletes the recipient's shared envelope
+// copy (and its version history), sends a revoke message so the recipient's
+// client drops its SharedLink, and removes the owner's ShareRecord. Each step
+// tolerates an already-absent target, so it is idempotent and retryable. It does
+// NOT re-key the item — callers that need re-keying (Revoke) do that separately;
+// DeleteItem does not, since the item is about to be destroyed.
+func (s *Service) dropShare(ctx context.Context, shareID, recipientID string) error {
 	if err := s.store.DeleteSharedEnvelope(ctx, shareID); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("deleting shared envelope %s: %w", shareID, err)
 	}
@@ -377,6 +460,7 @@ func (s *Service) revokeShare(ctx context.Context, shareID, recipientID string) 
 		SenderID:  s.entityID,
 		Timestamp: time.Now().UTC(),
 	}
+	s.signMessage(&msg)
 	if err := s.store.SendMessage(ctx, recipientID, newID(), msg); err != nil {
 		return fmt.Errorf("sending revoke message to %s: %w", recipientID, err)
 	}
@@ -387,25 +471,56 @@ func (s *Service) revokeShare(ctx context.Context, shareID, recipientID string) 
 	return nil
 }
 
-// ProcessInbox reads all pending inbox messages and applies them.
+// Inbox-robustness limits. The inbox is world-writable (any user may create a
+// message in any inbox), so a hostile sender can flood it or send oversized
+// messages. These bounds keep one inbox from stalling or exhausting a victim.
+const (
+	// maxInboxPerRun caps how many messages a single ProcessInbox call handles.
+	// Excess is left for the next run, so a flood degrades to a slower drain
+	// rather than an unbounded synchronous stall. Bad messages are consumed
+	// (discarded), so the backlog still shrinks every run.
+	maxInboxPerRun = 256
+	// maxWrappedKeyLen bounds the only large attacker-controlled field in a share
+	// message; a legitimate JSON-encoded WrappedKey is a few hundred bytes.
+	maxWrappedKeyLen = 4096
+	// maxSharePathLen / maxItemTypeLen bound the small string fields.
+	maxSharePathLen = 256
+	maxItemTypeLen  = 64
+)
+
+// ProcessInbox reads pending inbox messages and applies up to maxInboxPerRun of
+// them.
 //
 // For share messages: writes a SharedLink, then deletes the message.
 // For revoke messages: removes the SharedLink, then deletes the message.
 //
 // Each handler writes/removes the link before deleting the message so that a
 // crash between the two steps is self-healing — the next ProcessInbox call
-// will re-process the still-present message.
+// will re-process the still-present message. Malformed, oversized, forged, or
+// unknown messages are discarded (never aborting the run), so a single hostile
+// message cannot block the victim's startup.
 func (s *Service) ProcessInbox(ctx context.Context) error {
 	entries, err := s.store.ListInboxMessages(ctx)
 	if err != nil {
 		return fmt.Errorf("listing inbox: %w", err)
 	}
-	for _, entry := range entries {
+	for i, entry := range entries {
+		if i >= maxInboxPerRun {
+			break
+		}
 		if err := s.processEntry(ctx, entry); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// shareWithinLimits reports whether a share payload's sizes are sane. Oversized
+// payloads are treated as hostile and discarded.
+func shareWithinLimits(p *SharePayload) bool {
+	return len(p.WrappedKey) <= maxWrappedKeyLen &&
+		len(p.SharePath) <= maxSharePathLen &&
+		len(p.ItemType) <= maxItemTypeLen
 }
 
 // OpenSharedItem fetches the shared envelope identified by link and decrypts it
@@ -436,13 +551,42 @@ func (s *Service) processEntry(ctx context.Context, entry InboxEntry) error {
 	case MessageRevoke:
 		return s.processRevoke(ctx, entry)
 	default:
-		return fmt.Errorf("unknown message type %q (share %s)", entry.Msg.Type, entry.Msg.ShareID)
+		// Unknown type — a malformed or hostile message. Discard it rather than
+		// returning an error, which would abort the whole inbox and let one bad
+		// message (anyone can write to any inbox) block the victim's startup.
+		return s.store.DeleteInboxMessage(ctx, entry.ID)
 	}
 }
 
 func (s *Service) processShare(ctx context.Context, entry InboxEntry) error {
-	if entry.Msg.Share == nil {
-		return fmt.Errorf("share message %s missing payload", entry.Msg.ShareID)
+	// Malformed or oversized share — discard it (consume without linking) rather
+	// than erroring, so it cannot block inbox processing or be re-evaluated every
+	// launch.
+	if entry.Msg.Share == nil || !shareWithinLimits(entry.Msg.Share) {
+		return s.store.DeleteInboxMessage(ctx, entry.ID)
+	}
+
+	// Authenticity (path): a shared envelope's storage path is the only owner
+	// attribution Vault enforces — the policy lets only entity X write under
+	// shared/X/*. The self-asserted Share.OwnerID is not trustworthy, so a message
+	// whose claimed owner disagrees with its share path, or whose path is
+	// malformed, is a forgery. The path owner is authoritative from here on.
+	pathOwner, _, err := parseSharePath(entry.Msg.Share.SharePath)
+	if err != nil || pathOwner != entry.Msg.Share.OwnerID {
+		return s.store.DeleteInboxMessage(ctx, entry.ID)
+	}
+
+	// Authenticity (signature): the share must be signed by the path owner — the
+	// only entity that could have written the envelope there. A published signing
+	// key makes verification mandatory; a legacy owner with no signing key falls
+	// back to the path-authority check above. A forged or downgraded signature is
+	// discarded.
+	ok, legacy, err := s.verifyMessage(ctx, pathOwner, entry.Msg)
+	if err != nil {
+		return err // infrastructure error — retry, do not discard a possibly-real message
+	}
+	if !ok && !legacy {
+		return s.store.DeleteInboxMessage(ctx, entry.ID)
 	}
 
 	// Idempotency: if we already have a link at this version or newer, skip writing
@@ -459,7 +603,7 @@ func (s *Service) processShare(ctx context.Context, entry InboxEntry) error {
 		ShareID:    entry.Msg.ShareID,
 		SharePath:  entry.Msg.Share.SharePath,
 		WrappedKey: entry.Msg.Share.WrappedKey,
-		OwnerID:    entry.Msg.Share.OwnerID,
+		OwnerID:    pathOwner,
 		ItemType:   entry.Msg.Share.ItemType,
 		EnvVersion: entry.Msg.EnvVersion,
 	}
@@ -472,8 +616,31 @@ func (s *Service) processShare(ctx context.Context, entry InboxEntry) error {
 }
 
 func (s *Service) processRevoke(ctx context.Context, entry InboxEntry) error {
-	// Remove link first — if we crash before deleting the message, the next
-	// ProcessInbox call will re-enter; ErrNotFound on the link is swallowed.
+	// Find the link this revoke targets. If there is none, there is nothing to
+	// remove (already revoked, or a revoke for a share we never had) — consume the
+	// message. This also preserves the self-healing order: a crash after deleting
+	// the link but before deleting the message re-enters here and short-circuits.
+	link, err := s.store.GetSharedLink(ctx, entry.Msg.ShareID)
+	if errors.Is(err, ErrNotFound) {
+		return s.store.DeleteInboxMessage(ctx, entry.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("loading link for revoke %s: %w", entry.Msg.ShareID, err)
+	}
+
+	// Authenticity: a revoke must be signed by the owner who shared the item.
+	// Anyone can drop a message in our inbox, so without this a forged revoke
+	// could delete a legitimately shared link (denial of access). A legacy owner
+	// with no published signing key is trusted (no stronger signal exists yet).
+	ok, legacy, err := s.verifyMessage(ctx, link.OwnerID, entry.Msg)
+	if err != nil {
+		return err
+	}
+	if !ok && !legacy {
+		// Forged or downgraded revoke — discard it and keep the link.
+		return s.store.DeleteInboxMessage(ctx, entry.ID)
+	}
+
 	if err := s.store.DeleteSharedLink(ctx, entry.Msg.ShareID); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("removing shared link for revoke %s: %w", entry.Msg.ShareID, err)
 	}
