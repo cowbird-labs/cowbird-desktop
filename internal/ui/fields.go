@@ -1,10 +1,33 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
 	"cowbird/internal/items"
 )
+
+// typeColors gives each item type a distinct accent drawn as a full-bleed band
+// behind the detail-view header, so types are distinguishable at a glance.
+// Alpha is kept low so the themed title text stays legible over it in both
+// light and dark themes.
+var typeColors = map[items.ItemType]color.NRGBA{
+	items.TypeLogin:    {R: 0x42, G: 0x85, B: 0xf4, A: 0x20}, // blue
+	items.TypeCard:     {R: 0x34, G: 0xa8, B: 0x53, A: 0x20}, // green
+	items.TypeNote:     {R: 0xfb, G: 0xbc, B: 0x05, A: 0x20}, // amber
+	items.TypeIdentity: {R: 0x9c, G: 0x27, B: 0xb0, A: 0x20}, // purple
+	items.TypePassword: {R: 0xea, G: 0x43, B: 0x35, A: 0x20}, // red
+	items.TypeCustom:   {R: 0x75, G: 0x75, B: 0x75, A: 0x20}, // grey
+}
+
+// typeColor returns the accent for an item type, falling back to the custom
+// (grey) accent for any unknown type.
+func typeColor(t items.ItemType) color.NRGBA {
+	if c, ok := typeColors[t]; ok {
+		return c
+	}
+	return typeColors[items.TypeCustom]
+}
 
 // fieldSpec describes one standard field of an item type: how to present it
 // and how to read/write it on the concrete content struct. Content types use
@@ -14,13 +37,19 @@ type fieldSpec struct {
 	sensitive bool // masked in the detail view, password entry in the editor
 	multiline bool
 	required  bool
+	totp      bool // holds a TOTP secret; detail view shows the live code
+	grouped   bool // detail view displays the value in space-separated groups of 4
+	url       bool // a website/URL field; detail view groups it into its own card
 	get       func(items.Content) string
 	set       func(items.Content, string) items.Content
 }
 
-func (f fieldSpec) req() fieldSpec    { f.required = true; return f }
-func (f fieldSpec) secret() fieldSpec { f.sensitive = true; return f }
-func (f fieldSpec) multi() fieldSpec  { f.multiline = true; return f }
+func (f fieldSpec) req() fieldSpec      { f.required = true; return f }
+func (f fieldSpec) secret() fieldSpec   { f.sensitive = true; return f }
+func (f fieldSpec) multi() fieldSpec    { f.multiline = true; return f }
+func (f fieldSpec) otp() fieldSpec      { f.totp = true; return f }
+func (f fieldSpec) grouped4() fieldSpec { f.grouped = true; return f }
+func (f fieldSpec) link() fieldSpec     { f.url = true; return f }
 
 // field builds a fieldSpec for concrete content type T, hiding the
 // items.Content type assertions in one place.
@@ -78,8 +107,8 @@ func buildTypeSpecs() map[items.ItemType]typeSpec {
 			field("Title", func(c items.Login) string { return c.Title }, func(c *items.Login, v string) { c.Title = v }).req(),
 			field("Username", func(c items.Login) string { return c.Username }, func(c *items.Login, v string) { c.Username = v }),
 			field("Password", func(c items.Login) string { return c.Password }, func(c *items.Login, v string) { c.Password = v }).secret(),
-			field("URLs (one per line)", func(c items.Login) string { return strings.Join(c.URLs, "\n") }, func(c *items.Login, v string) { c.URLs = splitLines(v) }).multi(),
-			field("TOTP secret", func(c items.Login) string { return c.TOTP }, func(c *items.Login, v string) { c.TOTP = v }).secret(),
+			field("URLs (one per line)", func(c items.Login) string { return strings.Join(c.URLs, "\n") }, func(c *items.Login, v string) { c.URLs = splitLines(v) }).multi().link(),
+			field("TOTP secret", func(c items.Login) string { return c.TOTP }, func(c *items.Login, v string) { c.TOTP = v }).secret().otp(),
 			field("Note", func(c items.Login) string { return c.Note }, func(c *items.Login, v string) { c.Note = v }).multi(),
 		},
 		getCustom: loginCustomGet,
@@ -95,7 +124,7 @@ func buildTypeSpecs() map[items.ItemType]typeSpec {
 		fields: []fieldSpec{
 			field("Title", func(c items.Card) string { return c.Title }, func(c *items.Card, v string) { c.Title = v }).req(),
 			field("Cardholder", func(c items.Card) string { return c.Cardholder }, func(c *items.Card, v string) { c.Cardholder = v }),
-			field("Number", func(c items.Card) string { return c.Number }, func(c *items.Card, v string) { c.Number = v }).secret(),
+			field("Number", func(c items.Card) string { return c.Number }, func(c *items.Card, v string) { c.Number = v }).secret().grouped4(),
 			field("Expiration date", func(c items.Card) string { return c.ExpirationDate }, func(c *items.Card, v string) { c.ExpirationDate = v }),
 			field("CVV", func(c items.Card) string { return c.CVV }, func(c *items.Card, v string) { c.CVV = v }).secret(),
 			field("PIN", func(c items.Card) string { return c.PIN }, func(c *items.Card, v string) { c.PIN = v }).secret(),

@@ -9,6 +9,7 @@ require (
 	github.com/dweymouth/fyne-tooltip v0.4.0
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/hashicorp/vault-client-go v0.4.3
+	github.com/pquerna/otp v1.5.0
 	github.com/spf13/viper v1.21.0
 	golang.org/x/crypto v0.51.0
 )
@@ -17,6 +18,7 @@ require (
 	fyne.io/systray v1.12.1 // indirect
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/danieljoos/wincred v1.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dvsekhvalnov/jose2go v1.7.0 // indirect

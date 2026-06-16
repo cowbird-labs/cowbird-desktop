@@ -33,6 +33,8 @@ type mainWindow struct {
 	status     *widget.Label
 	retryBtn   *widget.Button
 	menuBtn    *widget.Button // hamburger; popup menu anchors to it
+
+	detailCleanup func() // stops background work (e.g. TOTP tickers) tied to the current detail pane
 }
 
 // NewMainWindow creates the main item list / editor window.
@@ -125,8 +127,23 @@ func (m *mainWindow) applyFilter() {
 	}
 }
 
-// setDetail swaps the right pane's content. Main thread only.
-func (m *mainWindow) setDetail(o fyne.CanvasObject) {
+// setDetail swaps the right pane's content. Main thread only. Any cleanups are
+// stored and run the next time the pane is replaced, so background work tied to
+// the outgoing view (e.g. TOTP refresh tickers) is stopped when it leaves.
+func (m *mainWindow) setDetail(o fyne.CanvasObject, cleanups ...func()) {
+	if m.detailCleanup != nil {
+		m.detailCleanup()
+		m.detailCleanup = nil
+	}
+	if len(cleanups) > 0 {
+		m.detailCleanup = func() {
+			for _, c := range cleanups {
+				if c != nil {
+					c()
+				}
+			}
+		}
+	}
 	m.detail.Objects = []fyne.CanvasObject{o}
 	m.detail.Refresh()
 }
