@@ -11,7 +11,8 @@ import (
 )
 
 type Config struct {
-	Vault Vault `mapstructure:"vault"`
+	Vault     Vault     `mapstructure:"vault"`
+	Generator Generator `mapstructure:"generator"`
 }
 
 type Vault struct {
@@ -19,6 +20,22 @@ type Vault struct {
 	MountPath      string        `mapstructure:"mount_path" default:"cowbird"`
 	AuthMethod     string        `mapstructure:"auth_method"`
 	RequestTimeout time.Duration `mapstructure:"request_timeout" default:"10s"`
+}
+
+// Generator holds the user's last-used password/passphrase generator settings,
+// persisted so the generator dialog reopens with the same choices.
+type Generator struct {
+	Mode             string `mapstructure:"mode" default:"password"` // "password" or "passphrase"
+	Length           int    `mapstructure:"length" default:"20"`
+	Lower            bool   `mapstructure:"lower" default:"true"`
+	Upper            bool   `mapstructure:"upper" default:"true"`
+	Digits           bool   `mapstructure:"digits" default:"true"`
+	Symbols          bool   `mapstructure:"symbols" default:"true"`
+	ExcludeAmbiguous bool   `mapstructure:"exclude_ambiguous" default:"false"`
+	Words            int    `mapstructure:"words" default:"5"`
+	Separator        string `mapstructure:"separator" default:"-"`
+	Capitalize       bool   `mapstructure:"capitalize" default:"true"`
+	IncludeNumber    bool   `mapstructure:"include_number" default:"true"`
 }
 
 func Load() (Config, error) {
@@ -45,7 +62,14 @@ func Load() (Config, error) {
 		}
 	}
 
+	// Seed defaults first, then overlay the file. mapstructure leaves fields
+	// absent from the source map untouched, so a config written before a new
+	// sub-section existed (e.g. [generator]) still receives that section's
+	// defaults rather than zero values.
 	cfg := Config{}
+	if err := defaults.Set(&cfg); err != nil {
+		return Config{}, err
+	}
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return Config{}, err
 	}

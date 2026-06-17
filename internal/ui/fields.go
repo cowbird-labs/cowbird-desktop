@@ -33,15 +33,16 @@ func typeColor(t items.ItemType) color.NRGBA {
 // and how to read/write it on the concrete content struct. Content types use
 // value receivers, so setters return the modified value.
 type fieldSpec struct {
-	label     string
-	sensitive bool // masked in the detail view, password entry in the editor
-	multiline bool
-	required  bool
-	totp      bool // holds a TOTP secret; detail view shows the live code
-	grouped   bool // detail view displays the value in space-separated groups of 4
-	url       bool // a website/URL field; detail view groups it into its own card
-	get       func(items.Content) string
-	set       func(items.Content, string) items.Content
+	label       string
+	sensitive   bool // masked in the detail view, password entry in the editor
+	multiline   bool
+	required    bool
+	totp        bool // holds a TOTP secret; detail view shows the live code
+	grouped     bool // detail view displays the value in space-separated groups of 4
+	url         bool // a website/URL field; detail view groups it into its own card
+	generatable bool // editor shows a generate-password button beside this field
+	get         func(items.Content) string
+	set         func(items.Content, string) items.Content
 }
 
 func (f fieldSpec) req() fieldSpec      { f.required = true; return f }
@@ -50,6 +51,7 @@ func (f fieldSpec) multi() fieldSpec    { f.multiline = true; return f }
 func (f fieldSpec) otp() fieldSpec      { f.totp = true; return f }
 func (f fieldSpec) grouped4() fieldSpec { f.grouped = true; return f }
 func (f fieldSpec) link() fieldSpec     { f.url = true; return f }
+func (f fieldSpec) gen() fieldSpec      { f.generatable = true; return f }
 
 // field builds a fieldSpec for concrete content type T, hiding the
 // items.Content type assertions in one place.
@@ -106,7 +108,7 @@ func buildTypeSpecs() map[items.ItemType]typeSpec {
 		fields: []fieldSpec{
 			field("Title", func(c items.Login) string { return c.Title }, func(c *items.Login, v string) { c.Title = v }).req(),
 			field("Username", func(c items.Login) string { return c.Username }, func(c *items.Login, v string) { c.Username = v }),
-			field("Password", func(c items.Login) string { return c.Password }, func(c *items.Login, v string) { c.Password = v }).secret(),
+			field("Password", func(c items.Login) string { return c.Password }, func(c *items.Login, v string) { c.Password = v }).secret().gen(),
 			field("URLs (one per line)", func(c items.Login) string { return strings.Join(c.URLs, "\n") }, func(c *items.Login, v string) { c.URLs = splitLines(v) }).multi().link(),
 			field("TOTP secret", func(c items.Login) string { return c.TOTP }, func(c *items.Login, v string) { c.TOTP = v }).secret().otp(),
 			field("Note", func(c items.Login) string { return c.Note }, func(c *items.Login, v string) { c.Note = v }).multi(),
@@ -177,7 +179,7 @@ func buildTypeSpecs() map[items.ItemType]typeSpec {
 		empty:   func() items.Content { return items.Password{} },
 		fields: []fieldSpec{
 			field("Title", func(c items.Password) string { return c.Title }, func(c *items.Password, v string) { c.Title = v }).req(),
-			field("Password", func(c items.Password) string { return c.Password }, func(c *items.Password, v string) { c.Password = v }).secret(),
+			field("Password", func(c items.Password) string { return c.Password }, func(c *items.Password, v string) { c.Password = v }).secret().gen(),
 			field("Note", func(c items.Password) string { return c.Note }, func(c *items.Password, v string) { c.Note = v }).multi(),
 		},
 		getCustom: passwordCustomGet,

@@ -16,7 +16,8 @@ import (
 // button. New app-level actions (export key, etc.) hang off this menu.
 func (m *mainWindow) showMainMenu() {
 	menu := fyne.NewMenu("",
-		fyne.NewMenuItem("Change Password", m.showChangePasswordDialog),
+		fyne.NewMenuItem("Generate Password", func() { m.showGeneratorDialog(nil) }),
+		fyne.NewMenuItem("Change Unlock Password", m.showChangePasswordDialog),
 		fyne.NewMenuItem("Rotate Key", m.showRotateKeyDialog),
 		fyne.NewMenuItem("Export Recovery Key", m.showExportKeyDialog),
 	)

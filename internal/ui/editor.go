@@ -55,7 +55,18 @@ func (m *mainWindow) showEditor(typ items.ItemType, row *itemRow) {
 		}
 		entry.SetText(f.get(content))
 		entries[i] = entry
-		form.Append(f.label, entry)
+
+		// Generatable fields get a dice button that opens the generator and
+		// fills the entry with the chosen value.
+		if f.generatable {
+			target := entry
+			genBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
+				m.showGeneratorDialog(func(v string) { target.SetText(v) })
+			})
+			form.Append(f.label, container.NewBorder(nil, nil, nil, genBtn, entry))
+		} else {
+			form.Append(f.label, entry)
+		}
 	}
 
 	// Custom fields: a repeater with add/remove rows.
@@ -72,15 +83,29 @@ func (m *mainWindow) showEditor(typ items.ItemType, row *itemRow) {
 			label: widget.NewEntry(),
 			value: widget.NewEntry(),
 		}
-		r.kind.SetSelected(kindDisplay(cf.Type))
 		r.label.SetPlaceHolder("Label")
 		r.label.SetText(cf.Label)
 		r.value.SetPlaceHolder("Value")
 		r.value.SetText(cf.Value)
 
+		// A generate button sits in the value cell, visible only while the row
+		// holds a Hidden (secret) field — the only custom kind worth generating.
+		valueGenBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
+			m.showGeneratorDialog(func(v string) { r.value.SetText(v) })
+		})
+		valueCell := container.NewBorder(nil, nil, nil, valueGenBtn, r.value)
+		r.kind.OnChanged = func(string) {
+			if kindFromDisplay(r.kind.Selected) == items.FieldHidden {
+				valueGenBtn.Show()
+			} else {
+				valueGenBtn.Hide()
+			}
+		}
+		r.kind.SetSelected(kindDisplay(cf.Type)) // fires OnChanged → sets initial button visibility
+
 		var removeBtn *widget.Button
 		removeBtn = widget.NewButtonWithIcon("", theme.DeleteIcon(), nil)
-		fields := container.NewGridWithColumns(3, r.kind, r.label, r.value)
+		fields := container.NewGridWithColumns(3, r.kind, r.label, valueCell)
 		r.box = container.NewBorder(nil, nil, nil, removeBtn, fields)
 		removeBtn.OnTapped = func() {
 			for i, cr := range customRows {

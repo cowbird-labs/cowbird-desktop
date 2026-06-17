@@ -47,6 +47,13 @@ func passwordStrength(pw string) (float64, string) {
 	effective := (float64(n) + float64(len(unique))) / 2
 	bits := effective * math.Log2(float64(charset))
 
+	return strengthFromBits(bits)
+}
+
+// strengthFromBits maps an entropy estimate (bits) to a 0..1 bar score and a
+// coarse label, the shared scale used by both the typed-password heuristic and
+// the generator's entropy-accurate readout.
+func strengthFromBits(bits float64) (float64, string) {
 	label := "Very weak"
 	switch {
 	case bits >= 80:
