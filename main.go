@@ -2,12 +2,14 @@ package main
 
 import (
 	"cowbird/internal/auth"
+	"cowbird/internal/cli"
 	"cowbird/internal/config"
 	"cowbird/internal/core"
 	"cowbird/internal/credentials"
 	"cowbird/internal/ui"
 	"cowbird/internal/vault"
 	"log"
+	"os"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -15,6 +17,15 @@ import (
 )
 
 func main() {
+	// Dispatch CLI subcommands; with no subcommand this runs runGUI.
+	if err := cli.Execute(runGUI); err != nil {
+		os.Exit(1)
+	}
+}
+
+// runGUI is the GUI bootstrap: setup → connect → unlock → main window. It is
+// the root command's no-argument path, unchanged from the previous main().
+func runGUI() {
 	a := app.NewWithID("co.avitac.cowbird")
 
 	cfg, err := config.Load()

@@ -47,8 +47,15 @@ jobs:
 
       - name: Package
         shell: bash
-        # fyne requires an x.y.z version; tags must look like v0.1.0
-        run: fyne package --release --app-version "${GITHUB_REF_NAME#v}"
+        # fyne requires an x.y.z version; tags must look like v0.1.0.
+        # GOFLAGS injects the same tag-derived version into cli.version (the
+        # runtime `cowbird version` string); fyne package forwards it to the
+        # underlying `go build`. Keep both derived from the tag so the packaging
+        # metadata and the runtime version never drift.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export GOFLAGS="-ldflags=-X=cowbird/internal/cli.version=${version}"
+          fyne package --release --app-version "${version}"
 
       - name: Collect artifact
         shell: bash
