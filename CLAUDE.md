@@ -18,6 +18,7 @@ Internal packages:
 - `vault` — Vault client wrapper; also implements `sharing.Store`
 - `crypto` — keypair generation, XChaCha20-Poly1305, X25519 wrapping, Argon2id KDF, key export/import
 - `items` — item content types and JSON codec
+- `transfer` — bidirectional import/export adapters for foreign formats (depends only on `items`)
 - `sharing` — envelope crypto, inbox protocol, share/revoke service
 - `core` — application state (`App`), identity initialisation
 - `ui` — Fyne UI
@@ -70,6 +71,12 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 
 `Encode`/`Decode` in `codec.go` use a `{"type": "...", "data": {...}}` envelope for type-dispatch. `Decode` uses a generic helper `decodeAs[T Content]`.
 
+`transfer.go` defines the bulk-export file format (`ExportFile{Format: "cowbird-export", Version, ExportedAt, Items}`, each `Items` entry an `Encode` envelope). `EncodeExport`/`DecodeExport` round-trip a `[]Content`; `DecodeExport` validates the format tag and version up front (rejecting foreign/unknown files before any write) and skips individual undecodable entries, returning a skipped count rather than aborting. Plaintext JSON — no passphrase (deferred). See `specs/002-import-export`. This is the native format; foreign-format adapters live in the `transfer` package.
+
+### transfer
+
+Bidirectional adapters between `items.Content` and other password managers' file formats. UI-independent (depends only on `items`); crypto/Vault orchestration stays in `core`. `Codec` interface = `{ID, Name, Extension, Marshal([]items.Content) ([]byte,error), Unmarshal([]byte) ([]items.Content, skipped int, err error)}`. `All()`/`Get(id)`/`Default()` expose the ordered registry (cowbird-native first). Codecs: `cowbird` (delegates to `items.EncodeExport`/`DecodeExport`), `bitwarden` (JSON), `onepassword` (`.1pux` = a ZIP of `export.data`+`export.attributes`, via `archive/zip`), `proton` (Proton Pass — imports JSON *or* CSV, auto-detected on the first non-space byte; exports JSON), `lastpass` (CSV). `mapping.go` holds shared helpers (`titleOf`/`customFieldsOf`/`noteOf` type-switches, expiration split/join, custom-field accumulators). Mapping is best-effort: standard fields map to standard fields; unrepresentable fields become cowbird custom fields (or the format's custom-field/notes facility); types with no native target collapse to the nearest type and are documented as lossy (e.g. cowbird `Password`→Bitwarden login; Proton `identity` and LastPass secure-note imports→cowbird `Note`). `Unmarshal` skips bad entries with a count and rejects foreign bytes up front without panicking. See `specs/003-third-party-formats` for the field-mapping tables. Format choices: 1Password `.1pux`, Bitwarden JSON, Proton JSON, LastPass CSV (LastPass exports CSV only).
+
 ### sharing
 
 `Store` interface (`store.go`) defines all Vault operations used by the package — implemented by `*vault.Vault`.
@@ -97,6 +104,10 @@ One `Content` interface with concrete typed structs: `Login`, `Card`, `Note`, `I
 `ExportIdentity` (in `core.go`) gates `crypto.ExportKey` behind the unlock password: it loads and unlocks the stored locked identity with the supplied unlock password (verifies it; generic error on mismatch), then exports the verified keypair under a *separate* export passphrase, returning the file bytes. Nothing is written to Vault; the caller (UI) writes the bytes to a user-chosen location. UI is `ui/password.go`'s export dialog (unlock password + export passphrase + confirm) reached from the hamburger menu, which then opens a file-save dialog writing `cowbird-recovery.json` (`ExportedKey` JSON; private key only ever persisted passphrase-encrypted). This is the only recovery path — there is no operator reset.
 
 `ImportIdentity` (in `core.go`) is the recovery counterpart: it restores a keypair from a recovery file (`crypto.ImportKey` with the export passphrase) and installs it as the Vault locked identity, re-locked under a new unlock password. Before overwriting an existing identity it compares the recovered public key against the published `pubkeys/<eid>` and returns `ErrIdentityMismatch` (unless `force`) so the UI can warn that importing a different key would orphan the user's items; a fresh/cleared Vault (no published key) skips the check. It clears any in-progress rotation marker (`identity.prev`, locked under the unknown old password) and re-publishes the public key. UI is the import form in `ui/unlock.go`, reachable from both unlock-window states; on `ErrIdentityMismatch` it shows a confirm dialog and retries with `force=true`.
+
+`ExportItems`/`ImportItems` (in `transfer.go`) move bulk *item* data (distinct from the key-material recovery above). Both take a `transfer.Codec` selecting the file format. `ExportItems` lists owned envelopes, decrypts each via `Service.OpenOwnItem` (skipping undecryptable/foreign ones), and serializes the contents with `codec.Marshal`. `ImportItems` runs `codec.Unmarshal` (whole-file validation before any write) and `Service.CreateItem`s each entry, returning an `ImportResult{Imported, Skipped}`. Plaintext export; owned items only; no de-dup (re-import creates duplicates). UI is `ui/transfer.go`'s "Import Items…"/"Export Items…" hamburger-menu actions — each opens a format picker (`widget.Select` over `transfer.All()`, default Cowbird); export then gates behind a clear-text warning confirm and a file-save dialog seeded with the codec's extension; import is a file-open dialog that runs behind a modal `NewCustomWithoutButtons` progress dialog (blocks the menu so a slow import cannot be started twice — that previously caused duplicate items), then reports counts and reloads the list.
+
+`RemoveDuplicateItems(ctx, dryRun)` (in `transfer.go`) is the cleanup for an accidental double-import: it deletes owned items whose `items.Encode` content is byte-identical to one already seen, keeping one of each (exact match only, so distinct items never merge; undecryptable items are skipped; deletion goes through `Service.DeleteItem` so shares are revoked). UI is `ui/transfer.go`'s "Remove Duplicate Items…" menu action — a dry-run scan, then a confirm showing the count, then the removal (both behind progress dialogs).
 
 ### ui
 

@@ -47,4 +47,32 @@ func TestTotpNow(t *testing.T) {
 	if _, _, err := totpNow("not-base32!!"); err == nil {
 		t.Error("malformed secret: expected error, got nil")
 	}
+
+	// Full otpauth:// URIs (as imported from other managers) are parsed for the
+	// secret and parameters rather than treated as a bare secret. Uses the public
+	// RFC 6238 test-vector secret, not a real account secret.
+	uri := "otpauth://totp/Example:alice%40example.com?issuer=Example&secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&algorithm=SHA1&digits=6&period=30"
+	code, remaining, err = totpNow(uri)
+	if err != nil {
+		t.Fatalf("otpauth URI: unexpected error: %v", err)
+	}
+	if len(code) != 6 {
+		t.Errorf("otpauth URI code = %q, want 6 digits", code)
+	}
+	if remaining < 1 || remaining > 30 {
+		t.Errorf("otpauth URI remaining = %d, want 1..30", remaining)
+	}
+
+	// A URI with non-default digits/period is honored.
+	uri8 := "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=8&period=60"
+	code, remaining, err = totpNow(uri8)
+	if err != nil {
+		t.Fatalf("8-digit URI: unexpected error: %v", err)
+	}
+	if len(code) != 8 {
+		t.Errorf("8-digit URI code = %q, want 8 digits", code)
+	}
+	if remaining < 1 || remaining > 60 {
+		t.Errorf("60s-period URI remaining = %d, want 1..60", remaining)
+	}
 }

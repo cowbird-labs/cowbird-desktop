@@ -20,6 +20,9 @@ func (m *mainWindow) showMainMenu() {
 		fyne.NewMenuItem("Change Unlock Password", m.showChangePasswordDialog),
 		fyne.NewMenuItem("Rotate Key", m.showRotateKeyDialog),
 		fyne.NewMenuItem("Export Recovery Key", m.showExportKeyDialog),
+		fyne.NewMenuItem("Import Items…", m.showImportItemsDialog),
+		fyne.NewMenuItem("Export Items…", m.showExportItemsDialog),
+		fyne.NewMenuItem("Remove Duplicate Items…", m.showRemoveDuplicatesDialog),
 	)
 	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(m.menuBtn)
 	pos.Y += m.menuBtn.Size().Height

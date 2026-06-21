@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	ttwidget "github.com/dweymouth/fyne-tooltip/widget"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 )
 
@@ -379,21 +380,48 @@ func groupDigits(s string, size int) string {
 	return b.String()
 }
 
-// totpNow generates the current code for a stored TOTP secret. Internal spaces
-// (common in grouped secrets) are stripped; the otp library handles padding and
-// case. It returns the code, the seconds remaining in the period, and an error
-// for an empty or malformed secret.
-func totpNow(secret string) (code string, remaining int, err error) {
-	secret = strings.ReplaceAll(secret, " ", "")
-	if secret == "" {
+// totpNow generates the current code for a stored TOTP value. The value may be a
+// bare base32 secret or a full otpauth:// URI (as exported by other password
+// managers) — the latter is parsed for its secret and parameters (period,
+// digits, algorithm), so non-default configurations render correctly. Internal
+// spaces (common in grouped secrets) are stripped; the otp library handles
+// padding and case. It returns the code, the seconds remaining in the period,
+// and an error for an empty or malformed value.
+func totpNow(value string) (code string, remaining int, err error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return "", 0, errors.New("empty TOTP secret")
 	}
 	now := time.Now()
+
+	// otpauth:// URI (the form other managers export): parse its secret and
+	// parameters so non-default period/digits/algorithm render correctly.
+	if strings.HasPrefix(strings.ToLower(value), "otpauth://") {
+		key, err := otp.NewKeyFromURL(value)
+		if err != nil {
+			return "", 0, err
+		}
+		period := int(key.Period())
+		if period <= 0 {
+			period = 30
+		}
+		code, err = totp.GenerateCodeCustom(key.Secret(), now, totp.ValidateOpts{
+			Period:    uint(period),
+			Digits:    key.Digits(),
+			Algorithm: key.Algorithm(),
+		})
+		if err != nil {
+			return "", 0, err
+		}
+		return code, period - int(now.Unix()%int64(period)), nil
+	}
+
+	// Bare base32 secret (default SHA1 / 6 digits / 30s, as GenerateCode sets).
+	secret := strings.ReplaceAll(value, " ", "")
 	code, err = totp.GenerateCode(secret, now)
 	if err != nil {
 		return "", 0, err
 	}
 	const period = 30
-	remaining = period - int(now.Unix()%period)
-	return code, remaining, nil
+	return code, period - int(now.Unix()%period), nil
 }
