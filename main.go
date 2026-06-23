@@ -8,6 +8,7 @@ import (
 	"cowbird/internal/credentials"
 	"cowbird/internal/ui"
 	"cowbird/internal/vault"
+	_ "embed"
 	"log"
 	"os"
 
@@ -15,6 +16,18 @@ import (
 	"fyne.io/fyne/v2/app"
 	"github.com/99designs/keyring"
 )
+
+// appIconPNG is embedded so the window icon renders even when the binary is run
+// unbundled (go run/go build), where Fyne would otherwise have no app icon.
+//
+//go:embed assets/icons/cowbirdicon180.png
+var appIconPNG []byte
+
+// trayIconPNG is the round white badge used specifically for the system tray
+// (distinct from the window icon), embedded so it is available unbundled.
+//
+//go:embed assets/icons/cowbird-tray.png
+var trayIconPNG []byte
 
 func main() {
 	// Dispatch CLI subcommands; with no subcommand this runs runGUI.
@@ -27,10 +40,20 @@ func main() {
 // the root command's no-argument path, unchanged from the previous main().
 func runGUI() {
 	a := app.NewWithID("co.avitac.cowbird")
+	a.SetIcon(fyne.NewStaticResource("cowbird.png", appIconPNG))
 
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("error loading config: %v", err)
+	}
+
+	// The system tray must be installed before the run loop starts (see
+	// ui.Tray); the resulting controller is attached to each window as the
+	// startup flow advances. nil when the preference is off or the platform has
+	// no tray, in which case Tray's methods are no-ops.
+	var tray *ui.Tray
+	if cfg.UI.SystemTray {
+		tray = ui.NewTray(a, fyne.NewStaticResource("cowbird-tray.png", trayIconPNG))
 	}
 
 	needsSetup := cfg.Vault.Address == "" || cfg.Vault.AuthMethod == ""
@@ -56,9 +79,10 @@ func runGUI() {
 	// main thread.
 	openUnlock := func(v *vault.Vault) {
 		unlockW := ui.NewUnlockWindow(a, v, func(coreApp *core.App) {
-			mainW := ui.NewMainWindow(a, coreApp)
+			mainW := ui.NewMainWindow(a, coreApp, tray)
 			mainW.Show()
 		})
+		tray.Attach(unlockW)
 		unlockW.Show()
 	}
 
@@ -74,6 +98,7 @@ func runGUI() {
 			fyne.Do(func() { openUnlock(v) })
 			return nil
 		})
+		tray.Attach(w)
 		w.ShowAndRun()
 		return
 	}
@@ -89,5 +114,6 @@ func runGUI() {
 	// unreachable it shows a dialog offering to edit the connection details
 	// rather than crashing.
 	w := ui.NewConnectingWindow(a, cfg, store, method, openUnlock)
+	tray.Attach(w)
 	w.ShowAndRun()
 }
