@@ -13,6 +13,16 @@ import (
 type Config struct {
 	Vault     Vault     `mapstructure:"vault"`
 	Generator Generator `mapstructure:"generator"`
+	UI        UI        `mapstructure:"ui"`
+}
+
+// UI holds user-facing application preferences (distinct from connection or
+// generator settings). It is the home for behaviours configured in the settings
+// dialog; auto-lock and clipboard-clearing timeouts will join SystemTray here.
+type UI struct {
+	// SystemTray keeps Cowbird running in the system tray when its window is
+	// closed, rather than quitting. Defaults to enabled.
+	SystemTray bool `mapstructure:"system_tray" default:"true"`
 }
 
 type Vault struct {

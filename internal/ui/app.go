@@ -18,8 +18,9 @@ import (
 
 // mainWindow holds the state of the item list / editor window.
 type mainWindow struct {
-	app *core.App
-	win fyne.Window
+	app  *core.App
+	tray *Tray // app-wide system tray; nil when disabled. Re-attached on reconnect.
+	win  fyne.Window
 
 	rows     []itemRow         // everything loaded, sorted by title
 	filtered []itemRow         // rows matching the current search/type filter
@@ -38,10 +39,14 @@ type mainWindow struct {
 }
 
 // NewMainWindow creates the main item list / editor window.
-func NewMainWindow(a fyne.App, app *core.App) fyne.Window {
-	m := &mainWindow{app: app, win: a.NewWindow("Cowbird")}
+func NewMainWindow(a fyne.App, app *core.App, tray *Tray) fyne.Window {
+	m := &mainWindow{app: app, tray: tray, win: a.NewWindow("Cowbird")}
 	m.win.Resize(fyne.NewSize(900, 600))
 	m.win.CenterOnScreen()
+
+	// Point the tray (if enabled) at this window so closing it hides to the tray
+	// rather than quitting. Nil-safe when the tray is off.
+	tray.Attach(m.win)
 
 	m.status = widget.NewLabel("")
 	m.retryBtn = widget.NewButton("Retry", func() { m.reload() })
