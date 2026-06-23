@@ -87,6 +87,8 @@ jobs:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -96,7 +98,35 @@ jobs:
       - name: Generate checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
 
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*
-          generate_release_notes: true
+      # Immutable releases seal a release's assets at the moment it is published:
+      # nothing can be added, changed, or removed afterwards. So every asset must
+      # be attached *before* publication. Do the canonical immutable-safe dance
+      # explicitly — create the release as a draft, upload all assets to the
+      # draft, then flip it to published in a single final step — rather than
+      # relying on a third-party action's implicit (and version-dependent)
+      # draft-first behaviour.
+      - name: Create draft release
+        # Idempotent: if a re-run finds the release already exists (e.g. a draft
+        # left behind by an earlier failed attempt) reuse it rather than failing.
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; reusing it."
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" \
+              --draft \
+              --verify-tag \
+              --generate-notes
+          fi
+
+      - name: Upload assets to draft
+        # --clobber overwrites assets from a previous attempt so retries are safe.
+        run: gh release upload "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+
+      - name: Publish release
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false \
+            --latest
