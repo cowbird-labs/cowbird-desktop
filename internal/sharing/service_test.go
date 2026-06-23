@@ -3,6 +3,7 @@ package sharing
 import (
 	"context"
 	"crypto/ed25519"
+	"strings"
 	"sync"
 	"testing"
 
@@ -463,6 +464,93 @@ func TestProcessShareRejectsForgedOwner(t *testing.T) {
 	}
 	if links[0].OwnerID != te.aliceID {
 		t.Fatalf("link owner must come from the share path, got %q", links[0].OwnerID)
+	}
+}
+
+func TestValidIDRejectsPathMetacharacters(t *testing.T) {
+	valid := []string{
+		"alice-entity-id",
+		"8d6a45e5-572f-4b9a-bf0e-000000000000",
+		"x",
+		"a_b-C9",
+	}
+	for _, s := range valid {
+		if !ValidID(s) {
+			t.Errorf("ValidID(%q) = false, want true", s)
+		}
+	}
+	invalid := []string{
+		"",                      // empty
+		"a/b",                   // namespace escape
+		"..",                    // traversal
+		"a.b",                   // dot
+		"a b",                   // space
+		"a%2fb",                 // percent-encoding metachar
+		strings.Repeat("a", 65), // too long
+	}
+	for _, s := range invalid {
+		if ValidID(s) {
+			t.Errorf("ValidID(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestParseSharePathRejectsMalformedSegments(t *testing.T) {
+	bad := []string{
+		"owner/../escape", // traversal in shareID
+		"owner/a/b",       // extra slash smuggled into shareID
+		"ow/ner/share",    // metachar in owner segment via extra slash
+		"owner with space/share",
+		"noslash",
+	}
+	for _, p := range bad {
+		if _, _, err := parseSharePath(p); err == nil {
+			t.Errorf("parseSharePath(%q) accepted a malformed path", p)
+		}
+	}
+	owner, share, err := parseSharePath("alice-entity-id/" + newID())
+	if err != nil {
+		t.Fatalf("parseSharePath rejected a well-formed path: %v", err)
+	}
+	if owner != "alice-entity-id" || share == "" {
+		t.Fatalf("parseSharePath returned %q/%q", owner, share)
+	}
+}
+
+func TestProcessShareRejectsMaliciousPath(t *testing.T) {
+	te := newTestEnv(t)
+
+	// A share message whose path tries to escape the shared namespace (extra
+	// slashes / traversal) must be discarded at the trust boundary, never written
+	// into a SharedLink.
+	mal := Message{
+		Type:       MessageShare,
+		ShareID:    newID(),
+		SenderID:   te.aliceID,
+		EnvVersion: 1,
+		Share: &SharePayload{
+			SharePath:  "alice-entity-id/../../pubkeys/" + te.bobID,
+			WrappedKey: []byte("ignored"),
+			ItemType:   string(items.TypeLogin),
+			OwnerID:    "alice-entity-id",
+		},
+	}
+	msgID := newID()
+	te.state.mu.Lock()
+	te.state.inbox[te.bobID] = map[string]Message{msgID: mal}
+	te.state.mu.Unlock()
+
+	if err := te.bobSvc.ProcessInbox(te.ctx); err != nil {
+		t.Fatalf("processing a malicious message must not error: %v", err)
+	}
+	if links, _ := te.bobStr.ListSharedLinks(te.ctx); len(links) != 0 {
+		t.Fatalf("malicious path must not create a link, got %d", len(links))
+	}
+	te.state.mu.Lock()
+	remaining := len(te.state.inbox[te.bobID])
+	te.state.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("malicious message should be discarded, %d left in inbox", remaining)
 	}
 }
 

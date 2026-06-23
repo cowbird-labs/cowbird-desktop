@@ -56,8 +56,15 @@ func (lastPassCodec) Unmarshal(data []byte) ([]items.Content, int, error) {
 	for i, h := range header {
 		col[strings.TrimSpace(strings.ToLower(h))] = i
 	}
-	if _, ok := col["name"]; !ok {
-		return nil, 0, fmt.Errorf("not a LastPass CSV (missing name column)")
+	// Require the distinctive LastPass login header, not merely a "name" column. A
+	// "name"-only check matched almost any CSV and silently produced garbage items
+	// from an unrelated file; demanding LastPass's actual columns makes a
+	// mis-routed import fail loudly here instead. "totp" is excluded — it is a
+	// newer column absent from older exports, and get() tolerates its absence.
+	for _, want := range []string{"url", "username", "password", "extra", "name", "grouping", "fav"} {
+		if _, ok := col[want]; !ok {
+			return nil, 0, fmt.Errorf("not a LastPass CSV (missing %q column)", want)
+		}
 	}
 
 	get := func(rec []string, key string) string {

@@ -343,6 +343,25 @@ func TestLastPassParsesRealSample(t *testing.T) {
 	}
 }
 
+func TestLastPassRejectsNameOnlyCSV(t *testing.T) {
+	c, _ := Get("lastpass")
+	// A generic CSV that merely has a "name" column is not a LastPass export and
+	// must be rejected rather than silently producing garbage items.
+	generic := []byte("id,name,value\n1,thing,42\n")
+	if _, _, err := c.Unmarshal(generic); err == nil {
+		t.Error("lastpass accepted a non-LastPass CSV that only has a name column")
+	}
+	// A header missing totp (older LastPass exports) is still accepted.
+	older := []byte("url,username,password,extra,name,grouping,fav\nhttps://x,u,p,,Site,F,0\n")
+	out, _, err := c.Unmarshal(older)
+	if err != nil {
+		t.Fatalf("rejected a LastPass CSV lacking the optional totp column: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d items, want 1", len(out))
+	}
+}
+
 func hasFieldValue(fields []items.Field, value string) bool {
 	for _, f := range fields {
 		if strings.TrimSpace(f.Value) == value {

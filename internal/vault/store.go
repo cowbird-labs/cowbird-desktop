@@ -208,6 +208,13 @@ func (v *Vault) PutSharedEnvelope(ctx context.Context, shareID string, env shari
 }
 
 func (v *Vault) GetSharedEnvelope(ctx context.Context, ownerID, shareID string) (sharing.Envelope, int64, error) {
+	// Defense in depth: ownerID/shareID originate from attacker-controlled share
+	// paths and are interpolated into a cross-owner KV path here. The sharing
+	// service validates them at its trust boundary, but guard again before path
+	// construction so a future caller cannot reintroduce a namespace-escape.
+	if !sharing.ValidID(ownerID) || !sharing.ValidID(shareID) {
+		return sharing.Envelope{}, 0, fmt.Errorf("invalid shared envelope id: owner %q share %q", ownerID, shareID)
+	}
 	var env sharing.Envelope
 	version, err := v.kvRead(ctx, "shared/"+ownerID+"/"+shareID, &env)
 	return env, version, err

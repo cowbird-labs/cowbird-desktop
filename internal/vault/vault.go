@@ -33,6 +33,10 @@ func NewVault(
 	creds credentials.CredentialStore,
 	method auth.Method,
 ) (*Vault, error) {
+	if err := validateAddress(cfg.Address); err != nil {
+		return nil, err
+	}
+
 	client, err := vaultclient.New(
 		vaultclient.WithAddress(cfg.Address),
 		vaultclient.WithRequestTimeout(cfg.RequestTimeout),
@@ -60,6 +64,32 @@ func NewVault(
 	go v.renewalLoop(ctx)
 
 	return v, nil
+}
+
+// validateAddress rejects a Vault address that would send the auth token and KV
+// traffic in cleartext. The at-rest item model is end-to-end encrypted, but the
+// bearer token itself rides on the connection, so plain http would leak it.
+// https is required; http is tolerated only for a loopback host (local dev).
+func validateAddress(address string) error {
+	u, err := url.Parse(address)
+	if err != nil {
+		return fmt.Errorf("invalid vault address %q: %w", address, err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" {
+			return nil
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("insecure vault address %q: http is only permitted for localhost; use https", address)
+	default:
+		return fmt.Errorf("invalid vault address %q: scheme must be https", address)
+	}
 }
 
 // VerifyMount confirms the given mount path exists and is accessible

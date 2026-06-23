@@ -545,6 +545,13 @@ func (s *Service) OpenSharedItem(ctx context.Context, link SharedLink) (items.Co
 }
 
 func (s *Service) processEntry(ctx context.Context, entry InboxEntry) error {
+	// ShareID is interpolated into the recipient's own link path
+	// (users/<eid>/links/<ShareID>) on both the share and revoke paths, so it must
+	// be validated here at the trust boundary, before any handler builds a path
+	// from it. A malformed ID is a forged/hostile message — discard it.
+	if !ValidID(entry.Msg.ShareID) {
+		return s.store.DeleteInboxMessage(ctx, entry.ID)
+	}
 	switch entry.Msg.Type {
 	case MessageShare:
 		return s.processShare(ctx, entry)
@@ -652,9 +659,48 @@ func sharePath(ownerID, shareID string) string {
 }
 
 func parseSharePath(path string) (ownerID, shareID string, err error) {
-	i := strings.IndexByte(path, '/')
-	if i < 0 {
+	ownerID, shareID, ok := strings.Cut(path, "/")
+	if !ok {
 		return "", "", fmt.Errorf("invalid share path %q: expected ownerID/shareID", path)
 	}
-	return path[:i], path[i+1:], nil
+	// Both segments are interpolated into Vault KV paths (shared/<ownerID>/<shareID>),
+	// and the path is attacker-controlled (anyone may write to any inbox). Reject
+	// anything that is not a plain opaque ID so a crafted segment cannot escape the
+	// namespace or smuggle KV-API metacharacters. See ValidID.
+	if !ValidID(ownerID) {
+		return "", "", fmt.Errorf("invalid share path %q: malformed owner ID", path)
+	}
+	if !ValidID(shareID) {
+		return "", "", fmt.Errorf("invalid share path %q: malformed share ID", path)
+	}
+	return ownerID, shareID, nil
+}
+
+// maxIDLen bounds an entity/share ID. Real IDs are UUIDs (36 chars); the bound is
+// generous but keeps a hostile ID from ballooning a constructed path.
+const maxIDLen = 64
+
+// ValidID reports whether s is a well-formed opaque identifier safe to interpolate
+// into a Vault KV path. Entity IDs and share IDs are UUID-shaped in normal use, but
+// since they can arrive on attacker-controlled inbox messages this is the trust
+// boundary: only non-empty strings of [A-Za-z0-9_-], bounded in length, are
+// accepted. That excludes '/' (namespace escape), '.' / ".." (traversal), and any
+// other KV-API metacharacter without hard-coding the exact UUID grammar (test
+// fixtures use names like "alice-entity-id").
+func ValidID(s string) bool {
+	if s == "" || len(s) > maxIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '-' || c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
