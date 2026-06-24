@@ -380,15 +380,33 @@ func (m *mainWindow) buildTOTPRow(label, secret string) (fyne.CanvasObject, func
 }
 
 // buildUnreadableDetail explains a row whose content failed to decrypt or
-// decode. The item may still be deleted if owned.
+// decode, including the likely cause and what the user can do. The item may
+// still be deleted if owned.
 func (m *mainWindow) buildUnreadableDetail(row itemRow) fyne.CanvasObject {
 	msg := widget.NewLabel(fmt.Sprintf("This item could not be read:\n%v", row.Err))
 	msg.Wrapping = fyne.TextWrapWord
+
+	// The most common cause differs by ownership. A shared item typically goes
+	// unreadable when its owner rotated their key and has not re-shared it yet
+	// (see CLAUDE.md: rotation does not re-key items shared *with* you). An owned
+	// item is more likely corrupted storage or a key mismatch.
+	var guidance string
+	if row.Shared {
+		guidance = "This is usually because " + m.displayName(row.OwnerID) +
+			" rotated their key and has not re-shared this item yet. " +
+			"Ask them to share it again. It will stay unreadable until they do."
+	} else {
+		guidance = "The stored data may be corrupted or was encrypted under a " +
+			"different key. If you cannot recover it, you can delete it below."
+	}
+	help := widget.NewLabel(guidance)
+	help.Wrapping = fyne.TextWrapWord
 
 	body := container.NewVBox(
 		widget.NewLabelWithStyle(unreadableTitle, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
 		msg,
+		help,
 	)
 	if !row.Shared {
 		rowCopy := row

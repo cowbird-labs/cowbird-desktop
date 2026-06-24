@@ -108,9 +108,9 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 		}
 	}
 
-	emptyLabel := widget.NewLabel("No items yet.\nUse + to create your first item.")
-	emptyLabel.Alignment = fyne.TextAlignCenter
-	m.emptyBox = container.NewCenter(emptyLabel)
+	m.emptyLabel = widget.NewLabel("No items yet.\nUse + to create your first item.")
+	m.emptyLabel.Alignment = fyne.TextAlignCenter
+	m.emptyBox = container.NewCenter(m.emptyLabel)
 	m.emptyBox.Hide()
 
 	// Two rows: search + type filter on top, favorites + label filter below, so

@@ -52,9 +52,14 @@ jobs:
         # runtime `cowbird version` string); fyne package forwards it to the
         # underlying `go build`. Keep both derived from the tag so the packaging
         # metadata and the runtime version never drift.
+        #
+        # -trimpath strips the runner's absolute build paths from the binary so
+        # the same tag produces the same output regardless of the checkout
+        # location (a prerequisite for reproducible builds). It does not affect
+        # the embedded VCS stamp `cowbird version` reads (-buildvcs, default on).
         run: |
           version="${GITHUB_REF_NAME#v}"
-          export GOFLAGS="-ldflags=-X=cowbird/internal/cli.version=${version}"
+          export GOFLAGS="-trimpath -ldflags=-X=cowbird/internal/cli.version=${version}"
           fyne package --release --app-version "${version}"
 
       - name: Collect artifact
