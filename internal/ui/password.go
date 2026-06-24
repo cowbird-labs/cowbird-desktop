@@ -15,6 +15,7 @@ import (
 // showMainMenu pops up the hamburger menu, anchored just below the menu
 // button. New app-level actions (export key, etc.) hang off this menu.
 func (m *mainWindow) showMainMenu() {
+	m.noteActivity()
 	menu := fyne.NewMenu("",
 		fyne.NewMenuItem("Generate Password", func() { m.showGeneratorDialog(nil) }),
 		fyne.NewMenuItem("Change Unlock Password", m.showChangePasswordDialog),

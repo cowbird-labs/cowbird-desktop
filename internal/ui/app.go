@@ -3,7 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"cowbird/internal/config"
 	"cowbird/internal/core"
 	"cowbird/internal/items"
 	"cowbird/internal/organization"
@@ -41,6 +43,12 @@ type mainWindow struct {
 	menuBtn     *widget.Button // hamburger; popup menu anchors to it
 
 	detailCleanup func() // stops background work (e.g. TOTP tickers) tied to the current detail pane
+
+	autoLockTimer *time.Timer   // inactivity timer; nil when auto-lock is disabled
+	autoLockDur   time.Duration // configured inactivity timeout; 0 disables auto-lock
+	clipClearDur  time.Duration // delay before a copied value is wiped; 0 disables clearing
+
+	lastClipboardValue string // last value Cowbird put on the clipboard, for safe clearing
 }
 
 // NewMainWindow creates the main item list / editor window.
@@ -79,6 +87,20 @@ func NewMainWindow(a fyne.App, app *core.App, tray *Tray) fyne.Window {
 	content := container.NewBorder(topBar, statusBar, nil, nil, split)
 	m.win.SetContent(fynetooltip.AddWindowToolTipLayer(content, m.win.Canvas()))
 
+	// Apply auto-lock / clipboard-clearing preferences. On a config read error
+	// both stay disabled (zero durations) rather than blocking the window.
+	if cfg, err := config.Load(); err == nil {
+		m.autoLockDur = autoLockDuration(cfg.UI)
+		m.clipClearDur = clipboardClearDuration(cfg.UI)
+	}
+	m.startAutoLock()
+
+	// Reset the inactivity timer on stray key events. Fyne only routes typed keys
+	// to the canvas handler when no widget is focused, so this is a supplement to
+	// the explicit noteActivity calls on list/search/menu interactions, not the
+	// sole signal.
+	m.win.Canvas().SetOnTypedKey(func(*fyne.KeyEvent) { m.noteActivity() })
+
 	m.reload()
 	return m.win
 }
@@ -110,6 +132,7 @@ func (m *mainWindow) reload() {
 // applyFilter rebuilds the filtered rows from the current search string and
 // type filter and refreshes the list. Main thread only.
 func (m *mainWindow) applyFilter() {
+	m.noteActivity()
 	search := m.search.Text
 	typ := items.ItemType("")
 	if sel := m.typeFilter.Selected; sel != "" && sel != allTypesOption {

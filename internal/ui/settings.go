@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"cowbird/internal/auth"
 	"cowbird/internal/config"
@@ -17,9 +19,9 @@ import (
 )
 
 // showSettingsDialog presents the application settings: a General section
-// (system tray today; auto-lock and clipboard clearing to follow) and the Vault
-// server connection details. Future sections hang off the same dialog as
-// additional blocks in the VBox assembled below.
+// (system tray, auto-lock, and clipboard clearing) and the Vault server
+// connection details. Future sections hang off the same dialog as additional
+// blocks in the VBox assembled below.
 //
 // Settings are read fresh from disk so the dialog reflects what is persisted,
 // not a stale in-memory copy. The credential store is opened lazily so editing
@@ -65,9 +67,11 @@ func (m *mainWindow) showSettingsDialog() {
 	d.Show()
 }
 
-// buildGeneralSection renders the general application preferences. Today that
-// is just the system-tray toggle; auto-lock and clipboard-clearing controls
-// will join it here. dismiss is wired to each control's Escape handler.
+// buildGeneralSection renders the general application preferences: the
+// system-tray toggle, auto-lock, and clipboard clearing. dismiss is wired to
+// each control's Escape handler. Each control persists its own change
+// immediately and (for auto-lock and clipboard clearing) applies it to the live
+// session.
 func (m *mainWindow) buildGeneralSection(cfg config.Config, dismiss func()) fyne.CanvasObject {
 	header := widget.NewLabelWithStyle("General", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
@@ -75,7 +79,7 @@ func (m *mainWindow) buildGeneralSection(cfg config.Config, dismiss func()) fyne
 	trayCheck.SetChecked(cfg.UI.SystemTray)
 	// Set OnChanged after SetChecked so the initial state does not trigger a save.
 	trayCheck.OnChanged = func(enabled bool) {
-		if err := saveSystemTray(enabled); err != nil {
+		if err := saveUISetting(func(ui *config.UI) { ui.SystemTray = enabled }); err != nil {
 			dialog.ShowError(fmt.Errorf("saving setting: %w", err), m.win)
 			// Revert the visual state so it reflects what is actually
 			// persisted. Set the field directly rather than via SetChecked,
@@ -92,17 +96,134 @@ func (m *mainWindow) buildGeneralSection(cfg config.Config, dismiss func()) fyne
 	note.Importance = widget.LowImportance
 	note.TextStyle = fyne.TextStyle{Italic: true}
 
-	return container.NewVBox(header, trayCheck, note)
+	autoLock := m.buildAutoLockControl(cfg, dismiss)
+	clipboard := m.buildClipboardClearControl(cfg, dismiss)
+
+	return container.NewVBox(
+		header,
+		trayCheck,
+		note,
+		widget.NewSeparator(),
+		autoLock,
+		widget.NewSeparator(),
+		clipboard,
+	)
 }
 
-// saveSystemTray persists the system-tray preference, preserving the rest of
-// the on-disk config.
-func saveSystemTray(enabled bool) error {
+// buildAutoLockControl renders the auto-lock toggle and its inactivity timeout
+// (in minutes). Changes persist immediately and re-arm the live inactivity timer.
+func (m *mainWindow) buildAutoLockControl(cfg config.Config, dismiss func()) fyne.CanvasObject {
+	check := newEscapableCheck("Lock automatically after a period of inactivity", dismiss)
+
+	minutes := newEscapableTextEntry(dismiss)
+	minutes.SetText(strconv.Itoa(cfg.UI.AutoLockMinutes))
+	minutes.Validator = positiveIntValidator("minutes")
+	unit := container.NewBorder(nil, nil, widget.NewLabel("Lock after"), widget.NewLabel("minutes"), minutes)
+
+	apply := func() {
+		enabled := check.Checked
+		if enabled {
+			minutes.Enable()
+		} else {
+			minutes.Disable()
+		}
+		// When enabled the value must be a positive integer; otherwise hold the
+		// last persisted setting and let the validator flag the bad input.
+		n, err := strconv.Atoi(strings.TrimSpace(minutes.Text))
+		if enabled && (err != nil || n <= 0) {
+			return
+		}
+		if saveErr := saveUISetting(func(ui *config.UI) {
+			ui.AutoLock = enabled
+			if n > 0 {
+				ui.AutoLockMinutes = n
+			}
+		}); saveErr != nil {
+			dialog.ShowError(fmt.Errorf("saving setting: %w", saveErr), m.win)
+			return
+		}
+		m.autoLockDur = autoLockDuration(config.UI{AutoLock: enabled, AutoLockMinutes: n})
+		m.startAutoLock()
+	}
+
+	check.SetChecked(cfg.UI.AutoLock)
+	if cfg.UI.AutoLock {
+		minutes.Enable()
+	} else {
+		minutes.Disable()
+	}
+	// Wire callbacks after the initial SetChecked/SetText so they don't fire a save.
+	check.OnChanged = func(bool) { apply() }
+	minutes.OnChanged = func(string) { apply() }
+
+	return container.NewVBox(check, unit)
+}
+
+// buildClipboardClearControl renders the clipboard-clearing toggle and its delay
+// (in seconds). Changes persist immediately and apply to the live session.
+func (m *mainWindow) buildClipboardClearControl(cfg config.Config, dismiss func()) fyne.CanvasObject {
+	check := newEscapableCheck("Clear the clipboard after copying a value", dismiss)
+
+	seconds := newEscapableTextEntry(dismiss)
+	seconds.SetText(strconv.Itoa(cfg.UI.ClipboardClearSeconds))
+	seconds.Validator = positiveIntValidator("seconds")
+	unit := container.NewBorder(nil, nil, widget.NewLabel("Clear after"), widget.NewLabel("seconds"), seconds)
+
+	apply := func() {
+		enabled := check.Checked
+		if enabled {
+			seconds.Enable()
+		} else {
+			seconds.Disable()
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(seconds.Text))
+		if enabled && (err != nil || n <= 0) {
+			return
+		}
+		if saveErr := saveUISetting(func(ui *config.UI) {
+			ui.ClipboardClear = enabled
+			if n > 0 {
+				ui.ClipboardClearSeconds = n
+			}
+		}); saveErr != nil {
+			dialog.ShowError(fmt.Errorf("saving setting: %w", saveErr), m.win)
+			return
+		}
+		m.clipClearDur = clipboardClearDuration(config.UI{ClipboardClear: enabled, ClipboardClearSeconds: n})
+	}
+
+	check.SetChecked(cfg.UI.ClipboardClear)
+	if cfg.UI.ClipboardClear {
+		seconds.Enable()
+	} else {
+		seconds.Disable()
+	}
+	check.OnChanged = func(bool) { apply() }
+	seconds.OnChanged = func(string) { apply() }
+
+	return container.NewVBox(check, unit)
+}
+
+// positiveIntValidator returns a validator that accepts only a positive integer,
+// naming the unit in the error message.
+func positiveIntValidator(unit string) func(string) error {
+	return func(s string) error {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n <= 0 {
+			return fmt.Errorf("enter a whole number of %s greater than 0", unit)
+		}
+		return nil
+	}
+}
+
+// saveUISetting loads the on-disk config, applies mutate to the UI section, and
+// writes it back, preserving the rest of the config.
+func saveUISetting(mutate func(*config.UI)) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	cfg.UI.SystemTray = enabled
+	mutate(&cfg.UI)
 	return config.Save(cfg)
 }
 

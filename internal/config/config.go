@@ -18,11 +18,23 @@ type Config struct {
 
 // UI holds user-facing application preferences (distinct from connection or
 // generator settings). It is the home for behaviours configured in the settings
-// dialog; auto-lock and clipboard-clearing timeouts will join SystemTray here.
+// dialog.
 type UI struct {
 	// SystemTray keeps Cowbird running in the system tray when its window is
 	// closed, rather than quitting. Defaults to enabled.
 	SystemTray bool `mapstructure:"system_tray" default:"true"`
+
+	// AutoLock locks the vault (returning to the unlock screen) after a period
+	// of inactivity. AutoLockMinutes is that period in minutes and applies only
+	// when AutoLock is enabled.
+	AutoLock        bool `mapstructure:"auto_lock" default:"true"`
+	AutoLockMinutes int  `mapstructure:"auto_lock_minutes" default:"15"`
+
+	// ClipboardClear clears the clipboard a fixed delay after Cowbird copies a
+	// value to it. ClipboardClearSeconds is that delay in seconds and applies
+	// only when ClipboardClear is enabled.
+	ClipboardClear        bool `mapstructure:"clipboard_clear" default:"true"`
+	ClipboardClearSeconds int  `mapstructure:"clipboard_clear_seconds" default:"30"`
 }
 
 type Vault struct {

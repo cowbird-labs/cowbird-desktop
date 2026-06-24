@@ -237,8 +237,7 @@ func (m *mainWindow) showGeneratorDialog(onUse func(string)) {
 	} else {
 		copyBtn := newEscapableButton("Copy", theme.ContentCopyIcon(), func() {
 			if current != "" {
-				m.win.Clipboard().SetContent(current)
-				m.status.SetText("Copied generated value")
+				m.copyToClipboard(current, "Copied generated value")
 			}
 		}, dismiss)
 		body.Add(container.NewHBox(copyBtn))
