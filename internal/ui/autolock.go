@@ -9,6 +9,10 @@ import (
 	"fyne.io/fyne/v2"
 )
 
+// statusFlashDuration is how long a transient status message (e.g. a copy
+// confirmation) stays before the status bar collapses again.
+const statusFlashDuration = 4 * time.Second
+
 // autoLockDuration converts the persisted auto-lock preference into a timer
 // duration. A zero result means auto-lock is disabled (the toggle is off or the
 // configured value is non-positive).
@@ -99,7 +103,17 @@ func (m *mainWindow) lock() {
 func (m *mainWindow) copyToClipboard(value, status string) {
 	m.win.Clipboard().SetContent(value)
 	if status != "" {
-		m.status.SetText(status)
+		m.setStatus(status)
+		// The copy confirmation is transient feedback; clear it after a moment so
+		// the status bar collapses again rather than lingering. Only clear if it
+		// is still our message (a later status update takes precedence).
+		time.AfterFunc(statusFlashDuration, func() {
+			fyne.Do(func() {
+				if m.status.Text == status {
+					m.setStatus("")
+				}
+			})
+		})
 	}
 	m.lastClipboardValue = value
 	m.noteActivity()

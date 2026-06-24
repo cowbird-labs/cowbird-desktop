@@ -174,7 +174,7 @@ func (m *mainWindow) showEditor(typ items.ItemType, row *itemRow) {
 
 		errLabel.Hide()
 		saveBtn.Disable()
-		m.status.SetText("Saving…")
+		m.setStatus("Saving…")
 
 		go func() {
 			var id string
@@ -190,10 +190,10 @@ func (m *mainWindow) showEditor(typ items.ItemType, row *itemRow) {
 			fyne.Do(func() {
 				saveBtn.Enable()
 				if err != nil {
-					m.status.SetText(fmt.Sprintf("Error saving item: %v", err))
+					m.setStatus(fmt.Sprintf("Error saving item: %v", err))
 					return
 				}
-				m.status.SetText("")
+				m.setStatus("")
 				m.showDetail(itemRow{ID: id, Title: titleOf(updated), Type: updated.Kind(), Content: updated})
 				m.reload()
 			})

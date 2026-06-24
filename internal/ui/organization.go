@@ -65,7 +65,7 @@ func (m *mainWindow) applyOrgChange() {
 func (m *mainWindow) persistOrg() {
 	data, err := m.org.JSON()
 	if err != nil {
-		m.status.SetText(fmt.Sprintf("Error saving organization: %v", err))
+		m.setStatus(fmt.Sprintf("Error saving organization: %v", err))
 		return
 	}
 	go func() {
@@ -74,7 +74,7 @@ func (m *mainWindow) persistOrg() {
 			err = m.app.SaveOrganization(context.Background(), snapshot)
 		}
 		if err != nil {
-			fyne.Do(func() { m.status.SetText(fmt.Sprintf("Error saving organization: %v", err)) })
+			fyne.Do(func() { m.setStatus(fmt.Sprintf("Error saving organization: %v", err)) })
 		}
 	}()
 }
