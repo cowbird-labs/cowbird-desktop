@@ -88,7 +88,7 @@ func (m *mainWindow) lock() {
 	}
 
 	v := m.app.Vault
-	unlockW := NewUnlockWindow(a, v, func(coreApp *core.App) {
+	unlockW := NewUnlockWindow(a, v, m.tray, func(coreApp *core.App) {
 		NewMainWindow(a, coreApp, m.tray).Show()
 	})
 	m.tray.Attach(unlockW) // keep close-to-tray during the re-unlock

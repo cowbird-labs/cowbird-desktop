@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"io"
 
+	"cowbird/internal/auth"
+	"cowbird/internal/config"
 	"cowbird/internal/core"
+	"cowbird/internal/credentials"
 	"cowbird/internal/sharing"
 	"cowbird/internal/vault"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -25,8 +29,11 @@ type UnlockDoneFunc func(app *core.App)
 // It first checks whether an identity already exists in Vault and presents
 // either a "set password" form (first run, with confirmation field) or an
 // "enter password" form (returning user). From either form the user can switch
-// to the import form to restore their key from a recovery file.
-func NewUnlockWindow(a fyne.App, v *vault.Vault, onUnlock UnlockDoneFunc) fyne.Window {
+// to the import form to restore their key from a recovery file, or open the
+// connection settings to point Cowbird at a different Vault. tray is re-attached
+// to any window this one spawns so close-to-tray survives a reconnect; it is
+// nil-safe.
+func NewUnlockWindow(a fyne.App, v *vault.Vault, tray *Tray, onUnlock UnlockDoneFunc) fyne.Window {
 	w := a.NewWindow("Cowbird")
 	w.Resize(fyne.NewSize(360, 300))
 	w.CenterOnScreen()
@@ -197,10 +204,44 @@ func NewUnlockWindow(a fyne.App, v *vault.Vault, onUnlock UnlockDoneFunc) fyne.W
 		)
 	}
 
-	gotoImportBtn := widget.NewButton("Import recovery key…", func() {
+	gotoImportBtn := widget.NewButton("Import recovery key", func() {
 		body.Objects = []fyne.CanvasObject{buildImportForm()}
 		body.Refresh()
 	})
+
+	// openSetup reopens the setup window pre-filled with the saved config so the
+	// user can point Cowbird at a different Vault (or fix the current one) before
+	// unlocking. On success it builds the new connection and returns to a fresh
+	// unlock window; the config and credential store are loaded here rather than
+	// threaded in, matching connect.go's reconnect path.
+	openSetup := func() {
+		cfg, err := config.Load()
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("loading settings: %w", err), w)
+			return
+		}
+		store, err := credentials.NewStore("cowbird")
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("opening credential store: %w", err), w)
+			return
+		}
+		setupW := NewSetupWindow(a, cfg, store, func(newCfg config.Config, newMethod auth.Method, newStore credentials.CredentialStore) error {
+			nv, err := vault.NewVault(newCfg.Vault, newStore, newMethod)
+			if err != nil {
+				return err
+			}
+			fyne.Do(func() {
+				nu := NewUnlockWindow(a, nv, tray, onUnlock)
+				tray.Attach(nu)
+				nu.Show()
+			})
+			return nil
+		})
+		tray.Attach(setupW)
+		setupW.Show()
+		w.Close()
+	}
+	connectionBtn := widget.NewButtonWithIcon("Connection settings", theme.SettingsIcon(), openSetup)
 
 	// Check first-run status asynchronously to avoid blocking the main thread.
 	go func() {
@@ -238,15 +279,20 @@ func NewUnlockWindow(a fyne.App, v *vault.Vault, onUnlock UnlockDoneFunc) fyne.W
 				fields = container.NewVBox(passwordEntry)
 			}
 
-			passwordForm = container.NewVBox(
+			// The recovery/connection actions are pinned to the bottom of the
+			// window, side by side; the form sits at the top.
+			bottom := container.NewVBox(
+				widget.NewSeparator(),
+				container.NewGridWithColumns(2, gotoImportBtn, connectionBtn),
+			)
+			top := container.NewVBox(
 				widget.NewLabel(heading),
 				widget.NewSeparator(),
 				fields,
 				submitBtn,
 				statusLabel,
-				widget.NewSeparator(),
-				gotoImportBtn,
 			)
+			passwordForm = container.NewBorder(nil, bottom, nil, nil, top)
 			body.Objects = []fyne.CanvasObject{passwordForm}
 			body.Refresh()
 			submitBtn.Enable()

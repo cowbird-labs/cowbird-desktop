@@ -34,7 +34,7 @@ type mainWindow struct {
 	search      *escapableEntry
 	typeFilter  *widget.Select
 	favFilter   *widget.Check
-	labelFilter *widget.Select
+	labelFilter *escapableSelect
 	list        *widget.List
 	emptyBox    *fyne.Container // shown instead of the list when there are no items
 	detail      *fyne.Container // right pane, single slot
@@ -75,7 +75,13 @@ func NewMainWindow(a fyne.App, app *core.App, tray *Tray) fyne.Window {
 	refreshBtn := ttwidget.NewButtonWithIcon("", theme.ViewRefreshIcon(), m.reload)
 	refreshBtn.Importance = widget.LowImportance
 	refreshBtn.SetToolTip("Refresh")
-	toolbar := container.NewHBox(newBtn, refreshBtn)
+	lockBtn := ttwidget.NewButtonWithIcon("", faIcon("lock.svg"), nil)
+	lockBtn.Importance = widget.LowImportance
+	lockBtn.SetToolTip("Lock")
+	// Lock closes this window; dismiss the tooltip first so its delayed timer
+	// doesn't fire against a canvas that no longer exists.
+	lockBtn.OnTapped = dismissTooltipThen(lockBtn, m.lock)
+	toolbar := container.NewHBox(newBtn, refreshBtn, lockBtn)
 
 	m.menuBtn = widget.NewButtonWithIcon("", theme.MenuIcon(), m.showMainMenu)
 	m.menuBtn.Importance = widget.LowImportance

@@ -271,7 +271,7 @@ func (m *mainWindow) editConnection(cfg config.Config) {
 		}
 		fyne.Do(func() {
 			m.app.Vault.Close() // stop the old token-renewal loop
-			unlockW := NewUnlockWindow(a, v, func(coreApp *core.App) {
+			unlockW := NewUnlockWindow(a, v, m.tray, func(coreApp *core.App) {
 				NewMainWindow(a, coreApp, m.tray).Show()
 			})
 			m.tray.Attach(unlockW) // keep close-to-tray during the re-unlock

@@ -48,9 +48,11 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 
 	// Label options are repopulated after each load via refreshLabelFilter; it
 	// starts with just the "all" sentinel since no organization is loaded yet.
-	m.labelFilter = widget.NewSelect([]string{allLabelsOption}, nil)
+	m.labelFilter = newEscapableSelect([]string{allLabelsOption}, nil)
 	m.labelFilter.SetSelected(allLabelsOption)
 	m.labelFilter.OnChanged = func(string) { m.applyFilter() }
+	// Escape clears the label filter back to "All labels".
+	m.labelFilter.onEscape = func() { m.labelFilter.SetSelected(allLabelsOption) }
 
 	m.list = widget.NewList(
 		func() int { return len(m.filtered) },
