@@ -10,8 +10,12 @@ import (
 )
 
 const allTypesOption = "All types"
+const allLabelsOption = "All labels"
 
 const unreadableTitle = "(unreadable item)"
+
+// favoriteGlyph is the leading marker shown on favorited list rows.
+const favoriteGlyph = "★"
 
 // rowStripeColor tints every other list row for readability. A translucent
 // mid-gray reads as slightly darker on light themes and slightly lighter on
@@ -40,14 +44,23 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 	m.typeFilter.SetSelected(allTypesOption)
 	m.typeFilter.OnChanged = func(string) { m.applyFilter() }
 
+	m.favFilter = widget.NewCheck("Favorites", func(bool) { m.applyFilter() })
+
+	// Label options are repopulated after each load via refreshLabelFilter; it
+	// starts with just the "all" sentinel since no organization is loaded yet.
+	m.labelFilter = widget.NewSelect([]string{allLabelsOption}, nil)
+	m.labelFilter.SetSelected(allLabelsOption)
+	m.labelFilter.OnChanged = func(string) { m.applyFilter() }
+
 	m.list = widget.NewList(
 		func() int { return len(m.filtered) },
 		func() fyne.CanvasObject {
 			title := widget.NewLabel("")
 			title.Truncation = fyne.TextTruncateEllipsis
+			star := widget.NewLabel("")
 			badge := widget.NewLabelWithStyle("", fyne.TextAlignTrailing, fyne.TextStyle{Italic: true})
 			stripe := canvas.NewRectangle(color.Transparent)
-			return container.NewStack(stripe, container.NewBorder(nil, nil, nil, badge, title))
+			return container.NewStack(stripe, container.NewBorder(nil, nil, star, badge, title))
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			if i >= len(m.filtered) {
@@ -57,8 +70,11 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 			box := o.(*fyne.Container)
 			stripe := box.Objects[0].(*canvas.Rectangle)
 			content := box.Objects[1].(*fyne.Container)
+			// Border children are appended after the center/edge objects, so the
+			// star (left) and badge (right) follow the title in Objects.
 			title := content.Objects[0].(*widget.Label)
-			badge := content.Objects[1].(*widget.Label)
+			star := content.Objects[1].(*widget.Label)
+			badge := content.Objects[2].(*widget.Label)
 
 			if i%2 == 1 {
 				stripe.FillColor = rowStripeColor
@@ -67,6 +83,11 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 			}
 			stripe.Refresh()
 
+			if row.Favorite {
+				star.SetText(favoriteGlyph)
+			} else {
+				star.SetText("")
+			}
 			if row.Err != nil {
 				title.SetText(unreadableTitle)
 			} else {
@@ -90,6 +111,10 @@ func (m *mainWindow) buildListPane() fyne.CanvasObject {
 	m.emptyBox = container.NewCenter(emptyLabel)
 	m.emptyBox.Hide()
 
-	filters := container.NewBorder(nil, nil, nil, m.typeFilter, m.search)
-	return container.NewBorder(filters, nil, nil, nil, container.NewMax(m.list, m.emptyBox))
+	// Two rows: search + type filter on top, favorites + label filter below, so
+	// the controls don't crowd the narrow list pane.
+	filtersTop := container.NewBorder(nil, nil, nil, m.typeFilter, m.search)
+	filtersBottom := container.NewBorder(nil, nil, m.favFilter, nil, m.labelFilter)
+	filters := container.NewVBox(filtersTop, filtersBottom)
+	return container.NewBorder(filters, nil, nil, nil, container.NewStack(m.list, m.emptyBox))
 }
