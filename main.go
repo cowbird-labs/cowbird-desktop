@@ -41,6 +41,8 @@ func main() {
 func runGUI() {
 	a := app.NewWithID("co.avitac.cowbird")
 	a.SetIcon(fyne.NewStaticResource("cowbird.png", appIconPNG))
+	// Replace Fyne's stock icon set with Font Awesome (colours/fonts/sizes kept).
+	a.Settings().SetTheme(ui.NewCowbirdTheme())
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -78,7 +80,7 @@ func runGUI() {
 	// openUnlock opens the unlock window for a live Vault. Must run on the Fyne
 	// main thread.
 	openUnlock := func(v *vault.Vault) {
-		unlockW := ui.NewUnlockWindow(a, v, func(coreApp *core.App) {
+		unlockW := ui.NewUnlockWindow(a, v, tray, func(coreApp *core.App) {
 			mainW := ui.NewMainWindow(a, coreApp, tray)
 			mainW.Show()
 		})

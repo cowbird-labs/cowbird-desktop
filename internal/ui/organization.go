@@ -210,33 +210,64 @@ func (m *mainWindow) showManageLabelsDialog() {
 
 	var edits []*rowEdit
 	list := container.NewVBox()
-	for _, l := range m.org.Labels {
-		re := &rowEdit{id: l.ID}
+	// placeholder shows "No labels yet." only while the list is empty; adding a
+	// row hides it.
+	var placeholder *widget.Label
+
+	// addRow appends an editable row for a label. id is empty for a label that
+	// does not exist yet (added via the Add action) and is created on Save.
+	addRow := func(id, name, colorText string) {
+		re := &rowEdit{id: id}
 		re.name = newEscapableTextEntry(dismiss)
-		re.name.SetText(l.Name)
+		re.name.SetText(name)
 		re.color = newEscapableTextEntry(dismiss)
 		re.color.SetPlaceHolder("#rrggbb")
-		re.color.SetText(l.Color)
+		re.color.SetText(colorText)
 
 		grid := container.NewGridWithColumns(2, re.name, re.color)
-		reCapture := re
 		var rowContainer *fyne.Container
 		delBtn := newEscapableButton("", theme.DeleteIcon(), func() {
-			reCapture.deleted = true
+			re.deleted = true
 			rowContainer.Hide()
 		}, dismiss)
 		rowContainer = container.NewBorder(nil, nil, nil, delBtn, grid)
 		edits = append(edits, re)
 		list.Add(rowContainer)
 	}
+
+	for _, l := range m.org.Labels {
+		addRow(l.ID, l.Name, l.Color)
+	}
 	if len(m.org.Labels) == 0 {
-		list.Add(widget.NewLabel("No labels yet."))
+		placeholder = widget.NewLabel("No labels yet.")
+		list.Add(placeholder)
 	}
 
 	newName := newEscapableTextEntry(dismiss)
 	newName.SetPlaceHolder("New label name")
 	newColor := newEscapableTextEntry(dismiss)
 	newColor.SetPlaceHolder("#rrggbb")
+
+	// addNewLabel turns the new-label inputs into a pending row (committed on
+	// Save), then clears the inputs and refocuses the name field so several
+	// labels can be added in a row. Empty names are ignored.
+	addNewLabel := func() {
+		name := strings.TrimSpace(newName.Text)
+		if name == "" {
+			m.win.Canvas().Focus(newName)
+			return
+		}
+		if placeholder != nil {
+			placeholder.Hide()
+		}
+		addRow("", name, strings.TrimSpace(newColor.Text))
+		newName.SetText("")
+		newColor.SetText("")
+		list.Refresh()
+		m.win.Canvas().Focus(newName)
+	}
+	newName.OnSubmitted = func(string) { addNewLabel() }
+	addBtn := newEscapableButton("Add", theme.ContentAddIcon(), addNewLabel, dismiss)
 
 	scroll := container.NewVScroll(list)
 	scroll.SetMinSize(fyne.NewSize(380, 240))
@@ -245,7 +276,7 @@ func (m *mainWindow) showManageLabelsDialog() {
 		scroll,
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Add label", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewGridWithColumns(2, newName, newColor),
+		container.NewBorder(nil, nil, nil, addBtn, container.NewGridWithColumns(2, newName, newColor)),
 	)
 
 	d = dialog.NewCustomConfirm("Manage Labels", "Save", "Cancel", content, func(ok bool) {
@@ -254,14 +285,27 @@ func (m *mainWindow) showManageLabelsDialog() {
 		}
 		for _, re := range edits {
 			if re.deleted {
-				m.org.DeleteLabel(re.id)
+				if re.id != "" {
+					m.org.DeleteLabel(re.id)
+				}
 				continue
 			}
-			if name := strings.TrimSpace(re.name.Text); name != "" {
+			name := strings.TrimSpace(re.name.Text)
+			if re.id == "" { // pending new label
+				if name == "" {
+					continue
+				}
+				if _, err := m.org.AddLabel(name, strings.TrimSpace(re.color.Text)); err != nil {
+					return
+				}
+				continue
+			}
+			if name != "" {
 				m.org.RenameLabel(re.id, name)
 			}
 			m.org.RecolorLabel(re.id, strings.TrimSpace(re.color.Text))
 		}
+		// Also commit anything typed into the new-label inputs but not yet added.
 		if name := strings.TrimSpace(newName.Text); name != "" {
 			if _, err := m.org.AddLabel(name, strings.TrimSpace(newColor.Text)); err != nil {
 				return
@@ -271,6 +315,10 @@ func (m *mainWindow) showManageLabelsDialog() {
 	}, m.win)
 	d.Resize(fyne.NewSize(440, 420))
 	d.Show()
+	// Focus the new-label field on open so Escape dismisses immediately: each
+	// control forwards Escape only while focused, and nothing else holds focus
+	// initially.
+	m.win.Canvas().Focus(newName)
 }
 
 // parseHexColor parses a "#rrggbb" string. Returns false for any other form.
