@@ -85,15 +85,15 @@ func (m *mainWindow) refreshSharingSection(row itemRow, body *fyne.Container) {
 // and refreshes the access list. Enter revokes, Escape dismisses.
 func (m *mainWindow) confirmRevoke(row itemRow, rec sharing.ShareRecord, body *fyne.Container) {
 	revoke := func() {
-		m.status.SetText("Revoking…")
+		m.setStatus("Revoking…")
 		go func() {
 			err := m.app.Service.Revoke(context.Background(), rec.ShareID, rec.RecipientID)
 			fyne.Do(func() {
 				if err != nil {
-					m.status.SetText(fmt.Sprintf("Error revoking: %v", err))
+					m.setStatus(fmt.Sprintf("Error revoking: %v", err))
 					return
 				}
-				m.status.SetText("")
+				m.setStatus("")
 				m.refreshSharingSection(row, body)
 			})
 		}()
@@ -148,15 +148,15 @@ func (m *mainWindow) showShareDialog(row itemRow, current map[string]bool, body 
 			return
 		}
 		recipientID := byLabel[sel.Selected]
-		m.status.SetText("Sharing…")
+		m.setStatus("Sharing…")
 		go func() {
 			err := m.app.Service.Share(context.Background(), row.ID, recipientID)
 			fyne.Do(func() {
 				if err != nil {
-					m.status.SetText(fmt.Sprintf("Error sharing: %v", err))
+					m.setStatus(fmt.Sprintf("Error sharing: %v", err))
 					return
 				}
-				m.status.SetText("")
+				m.setStatus("")
 				m.refreshSharingSection(row, body)
 			})
 		}()

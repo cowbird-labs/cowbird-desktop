@@ -40,7 +40,8 @@ type mainWindow struct {
 	detail      *fyne.Container // right pane, single slot
 	status      *widget.Label
 	retryBtn    *widget.Button
-	menuBtn     *widget.Button // hamburger; popup menu anchors to it
+	statusBar   *fyne.Container // bottom bar; hidden while there is nothing to show
+	menuBtn     *widget.Button  // hamburger; popup menu anchors to it
 
 	detailCleanup func() // stops background work (e.g. TOTP tickers) tied to the current detail pane
 
@@ -83,8 +84,9 @@ func NewMainWindow(a fyne.App, app *core.App, tray *Tray) fyne.Window {
 	split := container.NewHSplit(m.buildListPane(), m.detail)
 	split.SetOffset(0.35)
 
-	statusBar := container.NewBorder(nil, nil, nil, m.retryBtn, m.status)
-	content := container.NewBorder(topBar, statusBar, nil, nil, split)
+	m.statusBar = container.NewBorder(nil, nil, nil, m.retryBtn, m.status)
+	m.statusBar.Hide() // collapses the bottom border until a message needs it
+	content := container.NewBorder(topBar, m.statusBar, nil, nil, split)
 	m.win.SetContent(fynetooltip.AddWindowToolTipLayer(content, m.win.Canvas()))
 
 	// Apply auto-lock / clipboard-clearing preferences. On a config read error
@@ -105,21 +107,40 @@ func NewMainWindow(a fyne.App, app *core.App, tray *Tray) fyne.Window {
 	return m.win
 }
 
+// setStatus sets the status-bar text and collapses the bar when there is
+// nothing to show (empty text and no Retry button), so it does not occupy a row
+// at the bottom of the window the rest of the time. Main thread only.
+func (m *mainWindow) setStatus(text string) {
+	m.status.SetText(text)
+	m.refreshStatusBar()
+}
+
+// refreshStatusBar shows the bottom bar when it carries a message or the Retry
+// button, and hides it otherwise. Border layout gives a hidden child no space,
+// so hiding the bar reclaims the row.
+func (m *mainWindow) refreshStatusBar() {
+	if m.status.Text == "" && !m.retryBtn.Visible() {
+		m.statusBar.Hide()
+	} else {
+		m.statusBar.Show()
+	}
+}
+
 // reload processes the inbox and reloads all items off the main thread, then
 // updates the list. Errors land in the status bar with a Retry action.
 func (m *mainWindow) reload() {
-	m.status.SetText("Loading…")
+	m.setStatus("Loading…")
 	m.retryBtn.Hide()
 
 	go func() {
 		rows, names, org, err := loadRows(context.Background(), m.app)
 		fyne.Do(func() {
 			if err != nil {
-				m.status.SetText(fmt.Sprintf("Error loading items: %v", err))
 				m.retryBtn.Show()
+				m.setStatus(fmt.Sprintf("Error loading items: %v", err))
 				return
 			}
-			m.status.SetText("")
+			m.setStatus("")
 			m.rows = rows
 			m.names = names
 			m.org = org
@@ -264,12 +285,12 @@ func (m *mainWindow) confirmDelete(row itemRow) {
 		if !confirmed {
 			return
 		}
-		m.status.SetText("Deleting…")
+		m.setStatus("Deleting…")
 		go func() {
 			err := m.app.Service.DeleteItem(context.Background(), row.ID)
 			fyne.Do(func() {
 				if err != nil {
-					m.status.SetText(fmt.Sprintf("Error deleting item: %v", err))
+					m.setStatus(fmt.Sprintf("Error deleting item: %v", err))
 					return
 				}
 				m.setDetail(detailPlaceholder())
