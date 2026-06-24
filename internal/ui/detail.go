@@ -87,6 +87,12 @@ func (m *mainWindow) showDetail(row itemRow) {
 	// fields holds everything below the accent header; detailContent pads and
 	// pairs it with the header band.
 	fields := container.NewVBox()
+	// Favorite toggle and labels sit at the top for every readable item, owned
+	// or shared — organization is a private overlay, never part of the item.
+	if m.org != nil {
+		fields.Add(hInset(m.buildOrgBar(row)))
+		fields.Add(vSpacer(theme.Padding() * 3))
+	}
 	if card := fieldCard(stdRows, true); card != nil {
 		fields.Add(card)
 	}

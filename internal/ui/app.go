@@ -6,6 +6,7 @@ import (
 
 	"cowbird/internal/core"
 	"cowbird/internal/items"
+	"cowbird/internal/organization"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -22,18 +23,22 @@ type mainWindow struct {
 	tray *Tray // app-wide system tray; nil when disabled. Re-attached on reconnect.
 	win  fyne.Window
 
-	rows     []itemRow         // everything loaded, sorted by title
+	rows     []itemRow         // everything loaded, sorted favorites-first then title
 	filtered []itemRow         // rows matching the current search/type filter
 	names    map[string]string // entityID → display name, from the directory
 
-	search     *escapableEntry
-	typeFilter *widget.Select
-	list       *widget.List
-	emptyBox   *fyne.Container // shown instead of the list when there are no items
-	detail     *fyne.Container // right pane, single slot
-	status     *widget.Label
-	retryBtn   *widget.Button
-	menuBtn    *widget.Button // hamburger; popup menu anchors to it
+	org *organization.Organization // per-user favorites and labels overlay
+
+	search      *escapableEntry
+	typeFilter  *widget.Select
+	favFilter   *widget.Check
+	labelFilter *widget.Select
+	list        *widget.List
+	emptyBox    *fyne.Container // shown instead of the list when there are no items
+	detail      *fyne.Container // right pane, single slot
+	status      *widget.Label
+	retryBtn    *widget.Button
+	menuBtn     *widget.Button // hamburger; popup menu anchors to it
 
 	detailCleanup func() // stops background work (e.g. TOTP tickers) tied to the current detail pane
 }
@@ -85,7 +90,7 @@ func (m *mainWindow) reload() {
 	m.retryBtn.Hide()
 
 	go func() {
-		rows, names, err := loadRows(context.Background(), m.app)
+		rows, names, org, err := loadRows(context.Background(), m.app)
 		fyne.Do(func() {
 			if err != nil {
 				m.status.SetText(fmt.Sprintf("Error loading items: %v", err))
@@ -95,6 +100,8 @@ func (m *mainWindow) reload() {
 			m.status.SetText("")
 			m.rows = rows
 			m.names = names
+			m.org = org
+			m.refreshLabelFilter()
 			m.applyFilter()
 		})
 	}()
@@ -113,10 +120,12 @@ func (m *mainWindow) applyFilter() {
 			}
 		}
 	}
+	favOnly := m.favFilter != nil && m.favFilter.Checked
+	labelID := m.selectedLabelID()
 
 	m.filtered = m.filtered[:0]
 	for _, row := range m.rows {
-		if row.matchesFilter(search, typ) {
+		if row.matchesFilter(search, typ, favOnly, labelID) {
 			m.filtered = append(m.filtered, row)
 		}
 	}

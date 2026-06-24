@@ -24,6 +24,7 @@ func (m *mainWindow) showMainMenu() {
 		fyne.NewMenuItem("Export Items…", m.showExportItemsDialog),
 		fyne.NewMenuItem("Remove Duplicate Items…", m.showRemoveDuplicatesDialog),
 		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Manage Labels…", m.showManageLabelsDialog),
 		fyne.NewMenuItem("Settings…", m.showSettingsDialog),
 	)
 	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(m.menuBtn)

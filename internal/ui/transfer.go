@@ -32,9 +32,11 @@ func formatNames() ([]string, map[string]transfer.Codec) {
 // items off the main thread and opens a file-save dialog for the result. The
 // warning precedes any work so a user who cancels never produces a plaintext file.
 func (m *mainWindow) showExportItemsDialog() {
+	var d dialog.Dialog
 	names, byName := formatNames()
-	formatSel := widget.NewSelect(names, nil)
+	formatSel := newEscapableSelect(names, nil)
 	formatSel.SetSelected(transfer.Default().Name())
+	formatSel.onEscape = func() { d.Hide() }
 
 	form := container.NewVBox(
 		widget.NewLabel("Export all of your items to a file."),
@@ -45,7 +47,7 @@ func (m *mainWindow) showExportItemsDialog() {
 				"delete it once imported elsewhere."),
 	)
 
-	dialog.ShowCustomConfirm("Export items", "Export…", "Cancel", form, func(ok bool) {
+	d = dialog.NewCustomConfirm("Export items", "Export…", "Cancel", form, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -64,6 +66,7 @@ func (m *mainWindow) showExportItemsDialog() {
 			})
 		}()
 	}, m.win)
+	d.Show()
 }
 
 // saveExportFile prompts for a location and writes the export bytes there.
@@ -99,16 +102,18 @@ func (m *mainWindow) saveExportFile(data []byte, codec transfer.Codec) {
 // The result (imported/skipped counts) is reported and the list reloads so newly
 // created items appear.
 func (m *mainWindow) showImportItemsDialog() {
+	var d dialog.Dialog
 	names, byName := formatNames()
-	formatSel := widget.NewSelect(names, nil)
+	formatSel := newEscapableSelect(names, nil)
 	formatSel.SetSelected(transfer.Default().Name())
+	formatSel.onEscape = func() { d.Hide() }
 
 	form := container.NewVBox(
 		widget.NewLabel("Import items from a file produced by another password manager."),
 		widget.NewForm(widget.NewFormItem("Source format", formatSel)),
 	)
 
-	dialog.ShowCustomConfirm("Import items", "Choose file…", "Cancel", form, func(ok bool) {
+	d = dialog.NewCustomConfirm("Import items", "Choose file…", "Cancel", form, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -118,6 +123,7 @@ func (m *mainWindow) showImportItemsDialog() {
 		}
 		m.openImportFile(codec)
 	}, m.win)
+	d.Show()
 }
 
 func (m *mainWindow) openImportFile(codec transfer.Codec) {
