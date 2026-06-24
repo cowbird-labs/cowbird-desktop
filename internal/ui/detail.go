@@ -23,6 +23,7 @@ const maskedValue = "••••••••"
 
 // showDetail renders the read-only detail view for row in the right pane.
 func (m *mainWindow) showDetail(row itemRow) {
+	m.noteActivity()
 	if row.Err != nil {
 		m.setDetail(m.buildUnreadableDetail(row))
 		return
@@ -284,8 +285,7 @@ func (m *mainWindow) buildFieldRow(label, value string, sensitive, grouped bool)
 		actions.Add(revealBtn)
 	}
 	copyBtn := ttwidget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
-		m.win.Clipboard().SetContent(value)
-		m.status.SetText(fmt.Sprintf("Copied %s", label))
+		m.copyToClipboard(value, fmt.Sprintf("Copied %s", label))
 	})
 	copyBtn.SetToolTip("Copy to clipboard")
 	actions.Add(copyBtn)
@@ -327,8 +327,7 @@ func (m *mainWindow) buildTOTPRow(label, secret string) (fyne.CanvasObject, func
 	update()
 
 	copyBtn := ttwidget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
-		m.win.Clipboard().SetContent(current)
-		m.status.SetText(fmt.Sprintf("Copied %s", label))
+		m.copyToClipboard(current, fmt.Sprintf("Copied %s", label))
 	})
 	copyBtn.SetToolTip("Copy code")
 
