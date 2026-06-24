@@ -200,6 +200,12 @@ go run .
 
 Requires a reachable Vault (KV v2 engine) with a per-entity templated policy as described above. Design documents live in [`specs/001-sharing-and-items/`](specs/001-sharing-and-items/): [spec](specs/001-sharing-and-items/spec.md), [plan](specs/001-sharing-and-items/plan.md), [data model](specs/001-sharing-and-items/data-model.md), and [decision record](specs/001-sharing-and-items/research.md).
 
+## Releasing
+
+Releases are built entirely by CI from a pushed `vX.Y.Z` git tag — see
+[RELEASING.md](RELEASING.md) for the process, the per-platform artifacts, and
+how the version is stamped into the binary.
+
 ## License
 
 Copyright (C) 2026 Anthony Vitacco

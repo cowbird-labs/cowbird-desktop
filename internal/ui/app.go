@@ -36,7 +36,8 @@ type mainWindow struct {
 	favFilter   *widget.Check
 	labelFilter *escapableSelect
 	list        *widget.List
-	emptyBox    *fyne.Container // shown instead of the list when there are no items
+	emptyBox    *fyne.Container // shown instead of the list when there are no rows to show
+	emptyLabel  *widget.Label   // message inside emptyBox; differs for an empty vault vs. no filter matches
 	detail      *fyne.Container // right pane, single slot
 	status      *widget.Label
 	retryBtn    *widget.Button
@@ -182,10 +183,19 @@ func (m *mainWindow) applyFilter() {
 
 	m.list.UnselectAll()
 	m.list.Refresh()
-	if len(m.rows) == 0 {
+	switch {
+	case len(m.rows) == 0:
+		// Truly empty vault: prompt to create the first item.
+		m.emptyLabel.SetText("No items yet.\nUse + to create your first item.")
 		m.emptyBox.Show()
 		m.list.Hide()
-	} else {
+	case len(m.filtered) == 0:
+		// Items exist but none match the current search/filters: distinct from an
+		// empty vault so the user knows to clear filters, not create an item.
+		m.emptyLabel.SetText("No items match your search or filters.\nPress Escape to clear them.")
+		m.emptyBox.Show()
+		m.list.Hide()
+	default:
 		m.emptyBox.Hide()
 		m.list.Show()
 	}
