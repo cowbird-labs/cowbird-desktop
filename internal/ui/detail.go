@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"net/url"
 	"strings"
 	"time"
 
@@ -66,7 +67,7 @@ func (m *mainWindow) showDetail(row itemRow) {
 				if i == 0 {
 					label = "Websites"
 				}
-				urlRows = append(urlRows, buildURLRow(label, u))
+				urlRows = append(urlRows, m.buildURLRow(label, u))
 			}
 			continue
 		}
@@ -162,16 +163,45 @@ func fieldLabel(text string) fyne.CanvasObject {
 	})
 }
 
-// buildURLRow renders a single website entry: an optional caption above the URL,
-// with no copy button — websites are meant to be read, not copied.
-func buildURLRow(label, url string) fyne.CanvasObject {
+// buildURLRow renders a single website entry: an optional caption above the URL
+// and an "open in browser" button. Websites are meant to be visited, not copied,
+// so the action is to open rather than to copy.
+func (m *mainWindow) buildURLRow(label, link string) fyne.CanvasObject {
 	var name fyne.CanvasObject
 	if label != "" {
 		name = fieldLabel(label)
 	}
-	value := widget.NewLabel(url)
+	value := widget.NewLabel(link)
 	value.Wrapping = fyne.TextWrapWord
-	return container.NewBorder(name, nil, nil, nil, value)
+
+	openBtn := ttwidget.NewButtonWithIcon("", theme.MailForwardIcon(), func() {
+		m.openURL(link)
+	})
+	openBtn.SetToolTip("Open in browser")
+
+	return container.NewBorder(name, nil, nil, openBtn, value)
+}
+
+// openURL opens link in the user's default browser. A link with no scheme is
+// assumed to be https, so entries stored as "example.com" still open. Failures
+// surface in the status bar rather than as a dialog.
+func (m *mainWindow) openURL(link string) {
+	m.noteActivity()
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return
+	}
+	if !strings.Contains(link, "://") {
+		link = "https://" + link
+	}
+	u, err := url.Parse(link)
+	if err != nil {
+		m.setStatus(fmt.Sprintf("Invalid URL: %v", err))
+		return
+	}
+	if err := fyne.CurrentApp().OpenURL(u); err != nil {
+		m.setStatus(fmt.Sprintf("Could not open URL: %v", err))
+	}
 }
 
 // fieldCard groups related field rows into a single rounded panel so they read
