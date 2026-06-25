@@ -6,6 +6,10 @@ A desktop password manager written in Go that uses [HashiCorp Vault](https://www
 - **Targets**: macOS / Linux / Windows desktop now; Android / iOS eventually
 - **Go**: 1.26
 
+<p align="center">
+  <img src="screenshots/item-view.png" alt="Cowbird main window — a login with username, password, and a live TOTP code" width="720">
+</p>
+
 ## Design intent
 
 Cowbird is built for deployments with a **known, finite set of users** — a company team or a family — where each deployment runs its own Vault. Within that scope it aims to provide:
@@ -13,6 +17,10 @@ Cowbird is built for deployments with a **known, finite set of users** — a com
 1. **End-to-end encrypted storage.** All item contents are encrypted on the client. The Vault operator can never read them.
 2. **Item sharing between users.** A user can share an individual item with another user, who can then read it (and see subsequent edits) without the content ever being re-encrypted per recipient.
 3. **No operator-side recovery.** The only recovery mechanism is a user-initiated, passphrase-protected export of the private key. There is deliberately no admin reset: no trusted party exists who could perform one without also being able to read your data.
+
+<p align="center">
+  <img src="screenshots/item-share.png" alt="Sharing an item with another user, end-to-end encrypted" width="720">
+</p>
 
 ## Status
 
